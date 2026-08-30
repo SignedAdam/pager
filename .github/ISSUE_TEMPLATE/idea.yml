@@ -1,0 +1,19 @@
+name: An idea
+description: Something pager should be able to do.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like it to do
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: What are you trying to build with it
+      description: >
+        The use case matters more than the feature. Most good additions here
+        came from someone describing a job, not proposing a flag.
+    validations:
+      required: true

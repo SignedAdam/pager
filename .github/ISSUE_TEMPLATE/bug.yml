@@ -1,0 +1,34 @@
+name: Something is broken
+description: A panel did not appear, looked wrong, or behaved unexpectedly.
+labels: [bug]
+body:
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      description: The whole `pager …` line, or the script around it.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: debug
+    attributes:
+      label: Output of the same command with PAGER_DEBUG=1
+      description: >
+        `PAGER_DEBUG=1 pager … ` prints where the panel was placed and which
+        stacking slot it claimed. Both of the worst bugs so far were invisible
+        without it.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: pager --version, and your macOS version
+      placeholder: pager 1.0.0, macOS 15.2
+    validations:
+      required: true

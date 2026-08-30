@@ -1,0 +1,12 @@
+bin/
+*.o
+.DS_Store
+
+# personal, not for the public repo
+.personal/
+
+# asks capture, local only
+.issues/
+
+# built by `make tarball`
+pager-*-macos.tar.gz

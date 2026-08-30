@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check it builds and passes
+        run: make check && make build && make test
+
+      - name: Package
+        id: package
+        run: |
+          make tarball
+          echo "file=$(ls pager-*-macos.tar.gz)" >> "$GITHUB_OUTPUT"
+
+      - name: Install it the way a stranger would, from the archive alone
+        run: |
+          export HOME="$(mktemp -d)"
+          mkdir -p "$HOME/.claude/skills" /tmp/verify
+          tar -xzf ${{ steps.package.outputs.file }} -C /tmp/verify
+          PATH="/bin:/usr/bin" bash /tmp/verify/pager/install.sh --no-tour
+          "$HOME/.local/bin/pager" --version
+          "$HOME/.local/bin/pager" --examples > /dev/null
+
+      - name: Attach it to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.file }}
+          generate_release_notes: true
+          body: |
+            Install without cloning:
+
+            ```bash
+            curl -L https://github.com/SignedAdam/pager/releases/latest/download/${{ steps.package.outputs.file }} | tar xz
+            ./pager/install.sh
+            ```
+
+            Needs macOS 13 or newer. No compiler required, a universal binary is
+            included. `pager --tour` walks through everything.

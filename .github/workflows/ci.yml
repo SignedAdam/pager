@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versions
+        run: swiftc --version && sw_vers
+
+      - name: Syntax check everything
+        run: make check
+
+      - name: The README must match the program
+        run: make readme
+
+      - name: Build
+        run: make build
+
+      - name: Drive the whole tour with a stub
+        run: make test
+
+      - name: The prebuilt binary must be universal and match the source
+        run: |
+          lipo -archs dist/pager | tee /dev/stderr | grep -q arm64
+          lipo -archs dist/pager | grep -q x86_64
+          # Comparing mtimes would be flaky, because a fresh checkout stamps
+          # every file at once. Compare what the two binaries actually say.
+          for probe in --version --examples; do
+            if ! diff <(./dist/pager $probe) <(./bin/pager $probe) > /dev/null; then
+              echo "::error::dist/pager is stale ($probe differs). Run 'make release' and commit it."
+              exit 1
+            fi
+          done
+
+      - name: Install into a throwaway home
+        run: |
+          export HOME="$(mktemp -d)"
+          mkdir -p "$HOME/.claude/skills"
+          ./install.sh --no-tour
+          "$HOME/.local/bin/pager" --version
+          "$HOME/.local/bin/pager" --examples > /dev/null
+          test -L "$HOME/.claude/skills/pager"
+
+      - name: Install with no compiler, using the prebuilt binary
+        run: |
+          export HOME="$(mktemp -d)"
+          rm -rf bin
+          # /usr/bin/swiftc is an Xcode shim, so it has to be off PATH entirely
+          # for the no-compiler path to be exercised.
+          PATH="/bin" ./install.sh --no-tour | grep -q "prebuilt universal binary"
+          lipo -archs bin/pager | grep -q x86_64
