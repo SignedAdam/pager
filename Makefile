@@ -123,7 +123,7 @@ test: check readme ## drive the whole tour with a stub, no windows opened
 tarball: ## build a self-contained archive people can install without git
 	@./install.sh --release >/dev/null
 	@rm -rf /tmp/pager-pkg && mkdir -p /tmp/pager-pkg/pager
-	@cp -R dist bin sounds assets tour skills examples install.sh LICENSE README.md /tmp/pager-pkg/pager/ 2>/dev/null || true
+	@cp -R dist bin src sounds assets tour skills examples install.sh LICENSE README.md /tmp/pager-pkg/pager/ 2>/dev/null || true
 	@cp dist/pager /tmp/pager-pkg/pager/bin/pager
 	@tar -czf pager-$(VERSION)-macos.tar.gz -C /tmp/pager-pkg pager
 	@rm -rf /tmp/pager-pkg
