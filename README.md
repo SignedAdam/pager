@@ -12,13 +12,16 @@ Long-running jobs often finish after you have moved to another window. A line in
 
 ![Four pager windows showing audio, a chart, an approval request, and a failed deploy](docs/hero.png)
 
-Watch the tour or run `pager --tour` in your terminal and 
-https://github.com/user-attachments/assets/1ec86c60-efa7-4878-9779-abc142b9b521
+Watch the tour or run `pager --tour` in your terminal 
+
+https://github.com/user-attachments/assets/dd9eee0b-8aee-4976-9700-dfd15fed6646
 
 
 
-installing. There is also a narrated ninety second walkthrough:
-https://github.com/user-attachments/assets/6b28625f-0de6-4b93-b61c-5c8bc92f1ffc
+
+installing. There is also a narrated 90 second walkthrough:
+
+https://github.com/user-attachments/assets/90d62923-d434-492a-a193-1f4d6a25e957
 
 
 
