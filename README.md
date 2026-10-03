@@ -12,8 +12,16 @@ Long-running jobs often finish after you have moved to another window. A line in
 
 ![Four pager windows showing audio, a chart, an approval request, and a failed deploy](docs/hero.png)
 
-[Watch the tour](docs/tour.mp4) (106 seconds), or run `pager --tour` after
-installing. There is also a [narrated ninety second walkthrough](docs/pager-narrated.mp4).
+Watch the tour or run `pager --tour` in your terminal and 
+https://github.com/user-attachments/assets/1ec86c60-efa7-4878-9779-abc142b9b521
+
+
+
+installing. There is also a narrated ninety second walkthrough:
+https://github.com/user-attachments/assets/6b28625f-0de6-4b93-b61c-5c8bc92f1ffc
+
+
+
 
 Any program that can run a shell command can use it. That includes cron jobs, git hooks, deploy scripts, local CI, shell traps, and coding agents. There is no service or SDK to integrate. The program is a single Swift source file with no third-party dependencies.
 
