@@ -35,7 +35,7 @@ enum AmbientSelfTest {
             event.sourceName = name
             return AmbientBrand.find(event)
         }
-        expect(brand("github-albastar")?.mark == "github", "slug word finds a brand")
+        expect(brand("github-acme")?.mark == "github", "slug word finds a brand")
         expect(brand("ci", "GitHub Actions")?.mark == "githubactions", "squeezed name wins")
         expect(brand("google-calendar")?.mark == "googlecalendar", "two words")
         expect(brand("coolify")?.symbol == "shippingbox.fill", "symbol brands")

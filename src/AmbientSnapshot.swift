@@ -106,11 +106,11 @@ enum AmbientSnapshot {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         var settings = AmbientSettings.load()
-        settings.connections = [AmbientConnection(id: "albastar", name: "albastar", url: "https://citadel.albastov.com/v1/events")]
+        settings.connections = [AmbientConnection(id: "home", name: "home", url: "https://hub.example.com/v1/events")]
         setenv("PAGER_AMBIENT_DIR", NSTemporaryDirectory() + "pager-snapshot-\(getpid())", 1)
         defer { try? FileManager.default.removeItem(atPath: AmbientPaths.directory) }
         let store = AmbientStore(settings: settings, state: AmbientState(), loadHistory: false)
-        store.phases = ["albastar": "connected"]
+        store.phases = ["home": "connected"]
         let now = Date()
         for (index, sample) in AmbientDemo.events().prefix(18).enumerated() {
             var event = sample

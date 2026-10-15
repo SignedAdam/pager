@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - ambient: source marks
 //
-// A source called `github`, `github-albastar` or "GitHub" gets the GitHub mark
+// A source called `github`, `github-acme` or "GitHub" gets the GitHub mark
 // and colour in the source column; `coolify` gets a shipping box in Coolify
 // purple; a source nothing matches keeps plain dim text. Marks are Simple
 // Icons (CC0) in assets/brands, fetched by tools/fetch-brands.sh. Your own:
@@ -65,7 +65,7 @@ struct AmbientBrand: Equatable {
     ]
 
     /// The first word of the slug or the name that is a known brand.
-    /// `github-albastar` and "GitHub Actions" both resolve; the whole name
+    /// `github-acme` and "GitHub Actions" both resolve; the whole name
     /// squeezed together ("googlecalendar") is tried first.
     static func find(_ event: AmbientEvent) -> AmbientBrand? {
         let label = event.label.lowercased()
