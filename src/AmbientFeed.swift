@@ -259,11 +259,14 @@ enum HubHTTP {
         return out
     }
 
-    /// `{"error":{"code","message"}}`, or whatever the body says.
+    /// `{"code","message"}` (protocol v1), or whatever the body says.
     static func errorText(_ status: Int, _ data: Data) -> String {
-        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-           let error = object["error"] as? [String: Any] {
-            return "HTTP \(status) \(error["code"] as? String ?? ""): \(error["message"] as? String ?? "")"
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            let nested = object["error"] as? [String: Any]
+            if let message = (object["message"] ?? nested?["message"]) as? String {
+                let code = (object["code"] ?? nested?["code"]) as? String ?? ""
+                return "HTTP \(status) \(code): \(message)"
+            }
         }
         let text = String(decoding: data.prefix(300), as: UTF8.self)
         return "HTTP \(status)" + (text.isEmpty ? "" : " \(text)")
@@ -492,7 +495,8 @@ final class AmbientActivity {
             onState(id, (object["dismissed_at"] as? String).flatMap(AmbientTime.parse))
         case "gap":
             gaps += 1
-            let missed = ((try? JSONSerialization.jsonObject(with: Data(frame.data.utf8))) as? [String: Any])?["missed"]
+            let gap = (try? JSONSerialization.jsonObject(with: Data(frame.data.utf8))) as? [String: Any]
+            let missed = gap?["skipped"] ?? gap?["missed"]
             AmbientLog.write("\(log): gap, \(missed.map { "\($0)" } ?? "some") event(s) missed; they stay in the hub's history")
         default:
             break

@@ -124,9 +124,9 @@ class Hub:
     def validate(self, body, pub):
         if not isinstance(body, dict):
             raise Problem(400, "invalid_body", "the body must be a JSON object")
-        if "source" in body:
-            raise Problem(400, "source_from_key", "do not send source; it comes from the publish key")
-        unknown = set(body) - WRITABLE
+        if "source" in body and body["source"] != pub["source"]:
+            raise Problem(403, "source_mismatch", "this key publishes only to its own source")
+        unknown = set(body) - WRITABLE - {"source"}
         if unknown:
             raise Problem(400, "unknown_field", "unknown field(s): " + ", ".join(sorted(unknown)))
         text, typ = body.get("text"), body.get("type")
@@ -279,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def fail(self, problem):
-        self.send_json(problem.status, {"error": {"code": problem.code, "message": problem.message}})
+        self.send_json(problem.status, {"ok": False, "error": problem.code.replace("_", "-"), "code": problem.code, "message": problem.message})
 
     def body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -337,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
                     s["last_event_at"] = e["received_at"]
                     if parse_time(e["received_at"]) >= day:
                         s["count_24h"] += 1
-                self.send_json(200, {"sources": list(out.values())})
+                self.send_json(200, list(out.values()))
             elif method == "GET" and rel == "/stream":
                 _, reader = self.hub.auth(auth, "reader")
                 self.stream(reader, query)
@@ -387,7 +387,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             limit = hub.args.replay_max
             if len(backlog) > limit:
-                frame("gap", {"missed": len(backlog) - limit})
+                frame("gap", {"after": str(after) if after is not None else None,
+                              "skipped": len(backlog) - limit, "resume": str(backlog[-limit - 1]["cursor"])})
                 backlog = backlog[-limit:]
             for e in backlog:
                 frame("event", hub.view(e, reader))
