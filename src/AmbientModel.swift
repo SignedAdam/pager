@@ -372,6 +372,8 @@ struct SourceOverride: Codable, Equatable {
     var lifetime: Lifetime?
     var color: String?
     var mute: Bool?
+    /// A mark in assets/brands or ~/.pager/brands, or an SF Symbol name.
+    var icon: String?
 }
 
 /// `~/.pager/ambient.json`. Every field is optional on disk, so a file written
@@ -399,6 +401,8 @@ struct AmbientSettings: Codable, Equatable {
     /// 0 to 1: the dark halo on the glyphs and the soft shade behind the stream,
     /// so a line reads over a white page as well as over a dark one.
     var shade = 0.6
+    /// The source's mark (GitHub, Stripe…) beside its name.
+    var sourceIcons = true
     var details = false
     var ages = true
     var middleClick = true
@@ -410,7 +414,7 @@ struct AmbientSettings: Codable, Equatable {
         case cards, icons, backdrop, shade, details, ages, sources, connections
         case rowGap = "row_gap", rowPadding = "row_padding", sidePadding = "side_padding"
         case columnGap = "column_gap", sourceWidth = "source_width", fontSize = "font_size"
-        case maxLines = "max_lines", middleClick = "middle_click"
+        case maxLines = "max_lines", middleClick = "middle_click", sourceIcons = "source_icons"
     }
 
     init() {}
@@ -429,7 +433,7 @@ struct AmbientSettings: Codable, Equatable {
         corner = v(.corner, d.corner); screen = v(.screen, d.screen)
         layout = v(.layout, d.layout); effect = v(.effect, d.effect); target = v(.target, d.target)
         period = v(.period, d.period); cards = v(.cards, d.cards); icons = v(.icons, d.icons)
-        backdrop = v(.backdrop, d.backdrop); shade = v(.shade, d.shade); details = v(.details, d.details); ages = v(.ages, d.ages)
+        backdrop = v(.backdrop, d.backdrop); shade = v(.shade, d.shade); sourceIcons = v(.sourceIcons, d.sourceIcons); details = v(.details, d.details); ages = v(.ages, d.ages)
         middleClick = v(.middleClick, d.middleClick); sources = v(.sources, d.sources)
         connections = v(.connections, d.connections)
         sanitize()
@@ -486,6 +490,7 @@ struct ResolvedPresentation: Equatable {
     var sourceColor: String?
     var lines: Int
     var muted: Bool
+    var brand: AmbientBrand?
 }
 
 enum AmbientRules {
@@ -494,6 +499,15 @@ enum AmbientRules {
     static func resolve(_ event: AmbientEvent, _ settings: AmbientSettings) -> ResolvedPresentation {
         let display = event.display ?? AmbientDisplay()
         let source = settings.sources[event.source]
+        // No known mark: a monogram (the "n" of Narkis in a circle), so the
+        // column keeps its rhythm.
+        var brand = AmbientBrand.find(event) ?? AmbientBrand.monogram(event.label)
+        if let icon = source?.icon?.trimmingCharacters(in: .whitespaces), !icon.isEmpty {
+            let known = AmbientBrand.known[icon]
+            brand = AmbientBrand(mark: known?.mark ?? (AmbientMarks.file(icon) != nil ? icon : nil),
+                                 symbol: known?.symbol ?? (AmbientMarks.file(icon) == nil ? icon : nil),
+                                 color: known?.color ?? brand?.color)
+        }
         let lifetime = (source?.lifetime ?? display.lifetime ?? .seconds(settings.lifetime)).clamped
         let period = display.period.map { $0.isFinite ? min(10, max(0.5, $0)) : settings.period } ?? settings.period
         return ResolvedPresentation(
@@ -503,9 +517,12 @@ enum AmbientRules {
             target: display.target.flatMap(EffectTarget.init(rawValue:)) ?? settings.target,
             period: period,
             accent: validHex(display.color) ?? accent(for: event),
-            sourceColor: validHex(source?.color) ?? validHex(event.sourceColor),
+            // Your own colour is taken as given; a hub's or a brand's is lifted
+            // if it would vanish on the dark shade.
+            sourceColor: validHex(source?.color) ?? AmbientBrand.readable(validHex(event.sourceColor) ?? brand?.color),
             lines: min(5, max(1, display.lines ?? settings.lines)),
-            muted: source?.mute ?? false)
+            muted: source?.mute ?? false,
+            brand: brand)
     }
 
     /// The emphasis colour when the event does not pick one: bad news red,
@@ -565,6 +582,13 @@ enum AmbientRules {
             let expires = anchor.addingTimeInterval(seconds)
             return Decision(show: expires.timeIntervalSince(now) > 0.5, expires: expires, fresh: fresh)
         }
+    }
+
+    /// "Pause until tomorrow" means 9:00 tomorrow, like a panel's remind.
+    static func tomorrowMorning(_ now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
     /// Exponential, capped at a minute, with jitter so two Macs that lost the
@@ -754,9 +778,13 @@ struct AmbientState: Codable, Equatable {
     var lastEventText: String?
     var lastEventSource: String?
     var stickies: [AmbientEvent] = []
+    /// Paused from the menu bar or `--pause`; the stream comes back by itself.
+    var pausedUntil: Date?
+    /// The Accessibility prompt for middle-click is shown once, not every login.
+    var askedAccessibility = false
 
     enum CodingKeys: String, CodingKey {
-        case cursors, stickies
+        case cursors, stickies, pausedUntil = "paused_until", askedAccessibility = "asked_accessibility"
         case lastEventID = "last_event_id", lastEventAt = "last_event_at"
         case lastEventText = "last_event_text", lastEventSource = "last_event_source"
     }
@@ -770,6 +798,8 @@ struct AmbientState: Codable, Equatable {
         lastEventAt = (try? c.decodeIfPresent(String.self, forKey: .lastEventAt)).flatMap { $0 }.flatMap(AmbientTime.parse)
         lastEventText = try? c.decodeIfPresent(String.self, forKey: .lastEventText)
         lastEventSource = try? c.decodeIfPresent(String.self, forKey: .lastEventSource)
+        pausedUntil = (try? c.decodeIfPresent(String.self, forKey: .pausedUntil)).flatMap { $0 }.flatMap(AmbientTime.parse)
+        askedAccessibility = ((try? c.decodeIfPresent(Bool.self, forKey: .askedAccessibility)) ?? nil) ?? false
         stickies = ((try? c.decodeIfPresent([AmbientEvent].self, forKey: .stickies)) ?? nil) ?? []
     }
 
@@ -780,6 +810,8 @@ struct AmbientState: Codable, Equatable {
         try c.encodeIfPresent(lastEventAt.map(AmbientTime.string), forKey: .lastEventAt)
         try c.encodeIfPresent(lastEventText, forKey: .lastEventText)
         try c.encodeIfPresent(lastEventSource, forKey: .lastEventSource)
+        try c.encodeIfPresent(pausedUntil.map(AmbientTime.string), forKey: .pausedUntil)
+        if askedAccessibility { try c.encode(true, forKey: .askedAccessibility) }
         try c.encode(stickies, forKey: .stickies)
     }
 

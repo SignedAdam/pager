@@ -33,6 +33,8 @@ struct AmbientLine: Identifiable, Equatable {
     }
     @Published var history: [AmbientEvent] = []
     @Published var paused = false
+    /// When a timed pause ends. Nil with `paused` set means until resumed.
+    @Published var pausedUntil: Date?
     /// Per connection id: `connected`, `reconnecting in 4s`, `no reader key`…
     @Published var phases: [String: String] = [:]
     @Published var keySources: [String: String] = [:]
@@ -58,6 +60,11 @@ struct AmbientLine: Identifiable, Equatable {
         self.state = state
         history = loadHistory ? Array(AmbientHistory.load(limit: historyLimit).reversed()) : []
         seen = Set(history.map(\.key))
+        if let until = state.pausedUntil, until > Date() {
+            paused = true
+            // "Until resumed" is stored as the far future, shown as no time at all.
+            pausedUntil = until > Date().addingTimeInterval(400 * 86_400) ? nil : until
+        }
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -154,6 +161,7 @@ struct AmbientLine: Identifiable, Equatable {
 
     private func tick() {
         let now = Date()
+        if paused, let until = pausedUntil, until <= now { resume() }
         guard lines.contains(where: { ($0.expires ?? .distantFuture) <= now }) else { return }
         withAnimation(.easeOut(duration: 0.65)) { lines.removeAll { ($0.expires ?? .distantFuture) <= now } }
         if lines.isEmpty, demoTimer == nil { demoFinished?() }
@@ -250,6 +258,31 @@ struct AmbientLine: Identifiable, Equatable {
 
     func clear() { withAnimation(.easeOut(duration: 0.4)) { lines.removeAll() } }
 
+    // MARK: pause
+
+    /// Quiet for a while: the screen clears, events still go to history.
+    func pause(until: Date?) {
+        paused = true
+        pausedUntil = until
+        state.pausedUntil = until ?? .distantFuture
+        scheduleStateSave()
+        clear()
+        AmbientLog.write("paused" + (until.map { " until \(AmbientTime.string($0))" } ?? ""))
+    }
+
+    /// Back on, without a flood: only what is still inside its lifetime (and
+    /// open stickies) returns, quietly, the same rule as after sleep.
+    func resume() {
+        guard paused else { return }
+        paused = false
+        pausedUntil = nil
+        state.pausedUntil = nil
+        scheduleStateSave()
+        for event in history.reversed() where event.dismissedAt == nil { present(event) }
+        AmbientLog.write("resumed")
+    }
+
+
     // MARK: demo
 
     func playDemo(count: Int, interval: TimeInterval) {
@@ -291,6 +324,12 @@ struct AmbientLine: Identifiable, Equatable {
                 phases[connection.id] = "bad URL"; continue
             }
             guard let (key, from) = AmbientCredentials.readKey(connection, total: all.count) else {
+                if case .needsApproval = AmbientKeychain.read(connection.id) {
+                    phases[connection.id] = "Keychain needs approval"
+                    AmbientLog.write("hub \(connection.id): the Keychain wants approval for this build; run "
+                                     + "`pager ambient connect` again, or point it at a key file")
+                    continue
+                }
                 phases[connection.id] = "no reader key"
                 AmbientLog.write("hub \(connection.id): no reader key (Keychain, key file or PAGER_AMBIENT_KEY)")
                 continue
@@ -359,7 +398,8 @@ struct AmbientLine: Identifiable, Equatable {
              "gaps": hubs[c.id]?.gaps ?? 0]
         }
         var out: [String: Any] = [
-            "running": true, "pid": Int(getpid()), "paused": paused, "connections": connections,
+            "running": true, "pid": Int(getpid()), "paused": paused,
+            "paused_until": pausedUntil.map(AmbientTime.string) ?? "", "connections": connections,
             "visible": lines.count, "visible_ids": lines.map(\.id), "history": history.count,
         ]
         if let at = state.lastEventAt { out["last_event_at"] = AmbientTime.string(at) }
@@ -495,7 +535,14 @@ struct AmbientRow: View {
     var right = true
 
     private var accent: Color { Color(hex: line.look.accent) ?? .white }
-    private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.75) ?? .white.opacity(0.5) }
+    private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.85) ?? .white.opacity(0.5) }
+
+    @ViewBuilder private var mark: some View {
+        if settings.sourceIcons, let brand = line.look.brand {
+            AmbientMark(brand: brand, color: Color(hex: line.look.sourceColor) ?? .white.opacity(0.7),
+                        size: settings.fontSize)
+        }
+    }
 
     var body: some View {
         if settings.cards { card } else { plain }
@@ -515,10 +562,13 @@ struct AmbientRow: View {
                 Image(systemName: AmbientRow.symbol(line.event)).foregroundColor(accent.opacity(0.7))
             }
             if line.look.layout == .split {
-                Text(line.label)
-                    .foregroundColor(sourceTint)
-                    .lineLimit(1)
-                    .frame(width: settings.sourceWidth, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    mark
+                    Text(line.label).foregroundColor(sourceTint).lineLimit(1)
+                }
+                .frame(width: settings.sourceWidth, alignment: .leading)
+            } else {
+                mark
             }
             message.frame(maxWidth: .infinity, alignment: right ? .trailing : .leading)
             if settings.ages { AmbientAge(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize) }
@@ -537,6 +587,7 @@ struct AmbientRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    mark
                     Text(line.label.uppercased())
                         .font(.system(size: max(9, settings.fontSize - 3), weight: .semibold, design: .monospaced))
                         .foregroundColor(Color(hex: line.look.sourceColor) ?? accent)
@@ -612,8 +663,9 @@ final class AmbientPanel: NSPanel {
     private var historyWindow: NSWindow?
     private var monitors: [Any] = []
     private var signals: [DispatchSourceSignal] = []
-    private var pauseItem: NSMenuItem?
-    private var statusLine: NSMenuItem?
+    private var middleClickTap: CFMachPort?
+    private var middleClickSwallowed = false
+    private var trustPoll: Timer?
 
     init(mode: Mode) {
         self.mode = mode
@@ -680,9 +732,83 @@ final class AmbientPanel: NSPanel {
 
     // MARK: middle click
 
+    /// The hit test, in screen coordinates (Cocoa, bottom-left origin).
+    fileprivate func line(at point: NSPoint) -> String? {
+        guard store.settings.middleClick, let panel, panel.frame.contains(point) else { return nil }
+        let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
+        let slack = store.settings.rowGap / 2
+        guard let hit = store.rowFrames.first(where: { _, frame in frame.insetBy(dx: 0, dy: -slack).contains(local) }),
+              store.lines.contains(where: { $0.id == hit.key }) else { return nil }
+        return hit.key
+    }
+
+    /// With Accessibility allowed, an event tap takes the middle-click that
+    /// lands on a line, so the app underneath never sees it. Every other
+    /// click, and a middle-click anywhere else, goes through untouched.
+    private func installMiddleClickTap() -> Bool {
+        guard middleClickTap == nil else { return true }
+        guard AXIsProcessTrusted() else { return false }
+        let mask = (1 << CGEventType.otherMouseDown.rawValue) | (1 << CGEventType.otherMouseUp.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, info in
+            guard let info else { return Unmanaged.passUnretained(event) }
+            let app = Unmanaged<AmbientApp>.fromOpaque(info).takeUnretainedValue()
+            return MainActor.assumeIsolated { app.tapped(type, event) }
+        }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                          eventsOfInterest: CGEventMask(mask), callback: callback,
+                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        middleClickTap = tap
+        AmbientLog.write("middle-click: event tap on, clicks on lines no longer reach the app below")
+        return true
+    }
+
+    fileprivate func tapped(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let middleClickTap { CGEvent.tapEnable(tap: middleClickTap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard event.getIntegerValueField(.mouseEventButtonNumber) == 2 else { return Unmanaged.passUnretained(event) }
+        if type == .otherMouseUp {
+            defer { middleClickSwallowed = false }
+            return middleClickSwallowed ? nil : Unmanaged.passUnretained(event)
+        }
+        // CG has its origin at the top of the main screen; Cocoa at the bottom.
+        let p = event.location
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        guard let key = line(at: NSPoint(x: p.x, y: height - p.y)) else { return Unmanaged.passUnretained(event) }
+        middleClickSwallowed = true
+        store.dismiss(key)
+        return nil
+    }
+
+    @objc private func askAccessibility() {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        if AXIsProcessTrustedWithOptions(options) { _ = installMiddleClickTap(); return }
+        // The grant arrives while we run; pick it up without a restart.
+        trustPoll?.invalidate()
+        var tries = 0
+        trustPoll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
+            Task { @MainActor in
+                tries += 1
+                if self?.installMiddleClickTap() == true || tries > 90 { timer.invalidate() }
+            }
+        }
+    }
+
     private func watchMiddleClicks() {
+        // Asked once, by the real overlay only (tests run with their own state dir).
+        if !installMiddleClickTap(), store.settings.middleClick, !store.state.askedAccessibility,
+           case .daemon = mode, ProcessInfo.processInfo.environment["PAGER_AMBIENT_DIR"] == nil {
+            store.state.askedAccessibility = true
+            store.scheduleStateSave()
+            askAccessibility()
+        }
+        // Without the tap, a monitor still dismisses; the click also reaches the app below.
         let handler: (NSEvent) -> Void = { [weak self] event in
-            guard event.buttonNumber == 2 else { return }
+            guard event.buttonNumber == 2, self?.middleClickTap == nil else { return }
             let location = NSEvent.mouseLocation
             Task { @MainActor in self?.middleClick(at: location) }
         }
@@ -697,13 +823,8 @@ final class AmbientPanel: NSPanel {
     }
 
     private func middleClick(at point: NSPoint) {
-        guard store.settings.middleClick, let panel, panel.frame.contains(point) else { return }
-        let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
-        let slack = store.settings.rowGap / 2
-        guard let hit = store.rowFrames.first(where: { _, frame in
-            frame.insetBy(dx: 0, dy: -slack).contains(local)
-        }), store.lines.contains(where: { $0.id == hit.key }) else { return }
-        store.dismiss(hit.key)
+        guard let key = line(at: point) else { return }
+        store.dismiss(key)
     }
 
     // MARK: signals and socket
@@ -760,8 +881,16 @@ final class AmbientPanel: NSPanel {
             store.playDemo(count: request["count"] as? Int ?? 50, interval: request["interval"] as? Double ?? 2)
             return ["ok": true]
         case "pause":
-            store.paused = (request["paused"] as? Bool) ?? !store.paused
-            return ["ok": true, "paused": store.paused]
+            if let minutes = request["minutes"] as? Double {
+                store.pause(until: Date().addingTimeInterval(minutes * 60))
+            } else if request["until"] as? String == "tomorrow" {
+                store.pause(until: AmbientRules.tomorrowMorning())
+            } else if (request["paused"] as? Bool) ?? !store.paused {
+                store.pause(until: nil)
+            } else {
+                store.resume()
+            }
+            return ["ok": true, "paused": store.paused, "until": store.pausedUntil.map(AmbientTime.string) ?? ""]
         case "clear":
             store.clear()
             return ["ok": true]
@@ -790,37 +919,47 @@ final class AmbientPanel: NSPanel {
         item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "pager ambient")
         let menu = NSMenu()
         menu.delegate = self
-        let line = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        line.isEnabled = false
-        statusLine = line
-        menu.addItem(line)
-        menu.addItem(.separator())
-        let pause = NSMenuItem(title: "Pause stream", action: #selector(togglePause), keyEquivalent: "")
-        pauseItem = pause
-        for entry in [pause,
-                      NSMenuItem(title: "Clear screen", action: #selector(clearScreen), keyEquivalent: ""),
-                      NSMenuItem.separator(),
-                      NSMenuItem(title: "History\u{2026}", action: #selector(showHistory), keyEquivalent: ""),
-                      NSMenuItem(title: "Settings\u{2026}", action: #selector(showSettings), keyEquivalent: ""),
-                      NSMenuItem(title: "Demo burst", action: #selector(demoBurst), keyEquivalent: ""),
-                      NSMenuItem.separator(),
-                      NSMenuItem(title: "Quit ambient", action: #selector(quit), keyEquivalent: "")] {
-            entry.target = self
-            menu.addItem(entry)
-        }
+        menu.autoenablesItems = false
         item.menu = menu
         statusItem = item
     }
 
+    /// Rebuilt each time it opens, so it always says what is true now.
     func menuWillOpen(_ menu: NSMenu) {
-        pauseItem?.title = store.paused ? "Resume stream" : "Pause stream"
-        let phases = store.activeConnections.map { "\($0.name): \(store.phases[$0.id] ?? "idle")" }
-        statusLine?.title = phases.isEmpty ? "Local only" : phases.joined(separator: "  \u{00B7}  ")
+        menu.removeAllItems()
+        func add(_ title: String, _ action: Selector?, enabled: Bool = true) {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self
+            entry.isEnabled = enabled && action != nil
+            menu.addItem(entry)
+        }
+        let clock = DateFormatter()
+        clock.dateFormat = Calendar.current.isDateInToday(store.pausedUntil ?? Date()) ? "HH:mm" : "EEE HH:mm"
+        if store.paused {
+            add(store.pausedUntil.map { "Paused until \(clock.string(from: $0))" } ?? "Paused", nil, enabled: false)
+            add("Resume", #selector(resume))
+        } else {
+            let phases = store.activeConnections.map { "\($0.name) \(store.phases[$0.id] ?? "idle")" }
+            add(phases.isEmpty ? "Local only" : phases.joined(separator: " \u{00B7} "), nil, enabled: false)
+        }
+        menu.addItem(.separator())
+        add("Pause 15 minutes", #selector(pause15))
+        add("Pause 1 hour", #selector(pause60))
+        add("Pause until tomorrow", #selector(pauseTomorrow))
+        menu.addItem(.separator())
+        add("Event log\u{2026}", #selector(showHistory))
+        add("Settings\u{2026}", #selector(showSettings))
+        if store.settings.middleClick && middleClickTap == nil {
+            add("Allow middle-click\u{2026}", #selector(askAccessibility))
+        }
+        menu.addItem(.separator())
+        add("Quit Ambient", #selector(quit))
     }
 
-    @objc private func togglePause() { store.paused.toggle() }
-    @objc private func clearScreen() { store.clear() }
-    @objc private func demoBurst() { store.playDemo(count: 6, interval: 0.35) }
+    @objc private func resume() { store.resume() }
+    @objc private func pause15() { store.pause(until: Date().addingTimeInterval(15 * 60)) }
+    @objc private func pause60() { store.pause(until: Date().addingTimeInterval(60 * 60)) }
+    @objc private func pauseTomorrow() { store.pause(until: AmbientRules.tomorrowMorning()) }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc func showSettings() {

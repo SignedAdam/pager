@@ -12,6 +12,11 @@ searchable history window; `pager log --window` lists ambient events too.
 **Shade.** A feathered, frosted dark shade behind the stream and a thin halo on
 the text keep lines readable over light windows; one slider sets its strength.
 
+**Marks and pauses.** Sources show their brand mark and colour (Simple Icons) or a
+monogram. The menu bar pauses for 15 minutes, an hour or until tomorrow, and
+`--pause` does it from a script. With Accessibility allowed, a middle-click on a
+line no longer reaches the app underneath.
+
 **`pager event`** puts a line on it from any script, over a local socket, with
 no server. With `--hub` it publishes to a hub instead.
 

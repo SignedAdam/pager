@@ -21,6 +21,7 @@ enum Ambient {
       --settings             open the settings window of the running overlay
       --history              open the history window
       --quit                 stop the running overlay
+      --pause <15m|1h|tomorrow|off>   quiet for a while; --resume ends it
       --install              run at login and restart on crash (LaunchAgent)
       --uninstall            remove the LaunchAgent
       --selftest             check the parts that need no screen
@@ -28,6 +29,7 @@ enum Ambient {
 
     pager ambient connect <url> --key <reader key> [--name N] [--sources a,b]
                              add a hub. Checks <url>/info, keeps the key in the Keychain
+      --key-file F --key-var NAME   read the key from an env file instead
     pager ambient connections            list hubs
     pager ambient disconnect <name>      remove one
 
@@ -67,6 +69,8 @@ enum Ambient {
         case "--install": return AmbientCommands.install()
         case "--uninstall": return AmbientCommands.uninstall()
         case "--quit": return AmbientCommands.send(["op": "quit"], done: "stopped")
+        case "--pause": return AmbientCommands.pause(arguments.dropFirst().first ?? "")
+        case "--resume": return AmbientCommands.send(["op": "pause", "paused": false], done: "resumed")
         case "--settings": return AmbientCommands.send(["op": "settings"], done: nil)
         case "--history": return AmbientCommands.send(["op": "history"], done: nil)
         case "--demo":
@@ -120,6 +124,31 @@ enum AmbientCommands {
         return reply["ok"] as? Bool == true ? 0 : 1
     }
 
+    static func pause(_ text: String) -> Int32 {
+        var request: [String: Any] = ["op": "pause"]
+        let lower = text.lowercased()
+        if lower == "tomorrow" { request["until"] = "tomorrow" }
+        else if lower == "off" || lower == "resume" { request["paused"] = false }
+        else if lower.isEmpty || lower == "on" { request["paused"] = true }
+        else if let n = Double(lower.dropLast()), lower.hasSuffix("m") { request["minutes"] = n }
+        else if let n = Double(lower.dropLast()), lower.hasSuffix("h") { request["minutes"] = n * 60 }
+        else if let n = Double(lower) { request["minutes"] = n }
+        else {
+            FileHandle.standardError.write(Data("usage: pager ambient --pause <15m|1h|tomorrow|off>\n".utf8)); return 2
+        }
+        guard let reply = AmbientSocket.request(request) else { print("pager ambient is not running"); return 1 }
+        guard reply["ok"] as? Bool == true else { print("pager ambient: \(reply["error"] as? String ?? "no answer")"); return 1 }
+        let until = (reply["until"] as? String).flatMap(AmbientTime.parse)
+        if reply["paused"] as? Bool == true {
+            let clock = DateFormatter()
+            clock.dateFormat = "EEE HH:mm"
+            print("  paused" + (until.map { " until \(clock.string(from: $0))" } ?? ""))
+        } else {
+            print("  resumed")
+        }
+        return 0
+    }
+
     // MARK: status
 
     static func status() -> Int32 {
@@ -129,7 +158,17 @@ enum AmbientCommands {
         func line(_ name: String, _ value: String) { print("  \(dim)\(name.padding(toLength: 11, withPad: " ", startingAt: 0))\(off)\(value)") }
         print("")
         if let reply {
-            line("ambient", "running (pid \(reply["pid"] as? Int ?? 0))" + ((reply["paused"] as? Bool) == true ? ", paused" : ""))
+            var running = "running (pid \(reply["pid"] as? Int ?? 0))"
+            if (reply["paused"] as? Bool) == true {
+                running += ", paused" + ((reply["paused_until"] as? String).flatMap(AmbientTime.parse)
+                    .map { date -> String in
+                        guard date < Date().addingTimeInterval(400 * 86_400) else { return "" }
+                        let clock = DateFormatter()
+                        clock.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "EEE HH:mm"
+                        return " until " + clock.string(from: date)
+                    } ?? "")
+            }
+            line("ambient", running)
         } else {
             line("ambient", "not running")
         }
@@ -165,7 +204,8 @@ enum AmbientCommands {
     /// Shared by `connect` and the settings window: check what /info said,
     /// keep the key in the Keychain, add or update the connection.
     static func adopt(result: Result<HubInfo, AmbientError>, base: URL, key: String, name: String,
-                      sources: [String], settings: inout AmbientSettings) -> Result<String, AmbientError> {
+                      sources: [String], settings: inout AmbientSettings,
+                      keyFile: String? = nil, keyVar: String? = nil) -> Result<String, AmbientError> {
         let info: HubInfo
         switch result {
         case .failure(let error): return .failure(error)
@@ -186,7 +226,13 @@ enum AmbientCommands {
             connection.id = id
             settings.connections.append(connection)
         }
-        guard AmbientKeychain.save(key, for: connection.id) else {
+        if let keyFile {
+            connection.keyFile = keyFile
+            connection.keyVar = keyVar
+            if let index = settings.connections.firstIndex(where: { $0.id == connection.id }) {
+                settings.connections[index] = connection
+            }
+        } else if !AmbientKeychain.save(key, for: connection.id) {
             settings.connections.removeAll { $0.id == connection.id }
             return .failure(AmbientError("could not save the key in the Keychain"))
         }
@@ -198,12 +244,14 @@ enum AmbientCommands {
     }
 
     static func connect(_ arguments: [String]) -> Int32 {
-        var url = "", key = "", name = "", sources: [String] = []
+        var url = "", key = "", name = "", sources: [String] = [], keyFile = "", keyVar = AmbientCredentials.readKeyVar
         var index = 0
         while index < arguments.count {
             let flag = arguments[index], next = index + 1 < arguments.count ? arguments[index + 1] : ""
             switch flag {
             case "--key": key = next; index += 1
+            case "--key-file": keyFile = next; index += 1
+            case "--key-var": keyVar = next; index += 1
             case "--name": name = next; index += 1
             case "--sources", "--source":
                 sources = next.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -214,13 +262,23 @@ enum AmbientCommands {
         }
         // `--key -` reads it from stdin, so it stays out of shell history.
         if key == "-" { key = readLine(strippingNewline: true)?.trimmingCharacters(in: .whitespaces) ?? "" }
+        // `--key-file F --key-var NAME`: the key stays in that env file and is
+        // read from there each start. Nothing goes to the Keychain, so a
+        // rebuilt binary never needs approval. Good for a LaunchAgent.
+        if !keyFile.isEmpty {
+            guard let fromFile = AmbientCredentials.fromFile(keyFile, name: keyVar) else {
+                FileHandle.standardError.write(Data("pager ambient: no \(keyVar)= in \(keyFile)\n".utf8)); return 1
+            }
+            key = fromFile
+        }
         guard let base = AmbientConnection.normalise(url), !key.isEmpty else {
             FileHandle.standardError.write(Data("usage: pager ambient connect <https://hub/base> --key <reader key> [--name N] [--sources a,b]\n".utf8))
             return 2
         }
         var settings = AmbientSettings.load()
         switch adopt(result: HubHTTP.info(base: base, key: key), base: base, key: key, name: name,
-                     sources: sources, settings: &settings) {
+                     sources: sources, settings: &settings,
+                     keyFile: keyFile.isEmpty ? nil : keyFile, keyVar: keyFile.isEmpty ? nil : keyVar) {
         case .failure(let error):
             FileHandle.standardError.write(Data("pager ambient: \(error)\n".utf8))
             return 1

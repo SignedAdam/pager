@@ -419,7 +419,7 @@ pager ambient connections
 pager ambient disconnect work
 ```
 
-`connect` checks the key against the hub's `/info`, shows which sources it may read, and keeps the key in the Keychain. The overlay holds one outbound connection per hub and resumes from the last event it saw, so sleep and network changes cost nothing. After a gap it catches up quietly: only lines still inside their lifetime come back, and they do not animate. Dismissing a line on one Mac dismisses it on your others, and only for you.
+`connect` checks the key against the hub's `/info`, shows which sources it may read, and keeps the key in the Keychain. With `--key-file ~/.secrets.env --key-var NAME` it reads the key from that env file at every start instead, which suits a LaunchAgent and survives rebuilds. The overlay holds one outbound connection per hub and resumes from the last event it saw, so sleep and network changes cost nothing. After a gap it catches up quietly: only lines still inside their lifetime come back, and they do not animate. Dismissing a line on one Mac dismisses it on your others, and only for you.
 
 To publish from a script to a hub instead of the local overlay:
 
@@ -432,9 +432,11 @@ Events from a hub are data. They are shown, filtered and stored, and nothing in 
 
 To run your own hub, use the reference one in [`hub/`](hub/README.md): one Python file on SQLite, no dependencies, with a Dockerfile. You add sources, hand each publisher a key bound to its source, and hand each person a reader key granted only the sources they may see, so a company can share some streams and keep others. If you build a hub on your own stack instead, `python3 hub/conformance.py <base url> --publish-key … --reader-key …` tells you whether it speaks the protocol.
 
+Sources get their mark and colour: a source named `github`, `github-acme` or "GitHub" shows the GitHub mark, `stripe` the Stripe one, and so on for about thirty services (Simple Icons, in `assets/brands`). Anything else gets a monogram. Put your own `<slug>.svg` or `.png` in `~/.pager/brands`, or set `icon` per source in `ambient.json`.
+
 ### Settings, history, running at login
 
-The menu bar icon has Pause, Clear screen, History, Settings and Demo burst. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is searchable and filters by hub, source and severity; `pager log --window` lists ambient events too.
+The menu bar icon pauses the stream for 15 minutes, an hour or until tomorrow morning, opens the event log and settings, and quits. `pager ambient --pause 1h` does the same from a script. Middle-click on a line needs Accessibility (the menu asks once); without it the line still goes, but the click also reaches the app underneath. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is searchable and filters by hub, source and severity; `pager log --window` lists ambient events too.
 
 ```sh
 pager ambient --status      # running, each hub's connection and cursor, the last event

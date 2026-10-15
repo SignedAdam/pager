@@ -23,10 +23,36 @@ enum AmbientSelfTest {
         setenv("PAGER_AMBIENT_DIR", dir, 1)
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        ages(); lifetimes(); events(); rules(); sse(); settings(); history(); publish(); connections(); plist()
+        brands(); ages(); lifetimes(); events(); rules(); sse(); settings(); history(); publish(); connections(); plist()
 
         print(failures == 0 ? "  ambient selftest: \(count) checks ok" : "  ambient selftest: \(failures) of \(count) failed")
         return failures == 0 ? 0 : 1
+    }
+
+    private static func brands() {
+        func brand(_ source: String, _ name: String? = nil) -> AmbientBrand? {
+            var event = AmbientEvent(id: "b", source: source, text: "x")
+            event.sourceName = name
+            return AmbientBrand.find(event)
+        }
+        expect(brand("github-albastar")?.mark == "github", "slug word finds a brand")
+        expect(brand("ci", "GitHub Actions")?.mark == "githubactions", "squeezed name wins")
+        expect(brand("google-calendar")?.mark == "googlecalendar", "two words")
+        expect(brand("coolify")?.symbol == "shippingbox.fill", "symbol brands")
+        expect(brand("narkis") == nil && AmbientBrand.monogram("Narkis")?.symbol == "n.circle.fill", "monogram fallback")
+        expect(AmbientBrand.readable("#181717") == "#e6edf3", "near-black brands turn light")
+        expect(AmbientBrand.readable("#2088ff") == "#2088ff", "bright brands stay")
+        var settings = AmbientSettings()
+        settings.sources["coolify"] = SourceOverride(icon: "github")
+        let look = AmbientRules.resolve(AmbientEvent(id: "c", source: "coolify", text: "x"), settings)
+        expect(look.brand?.mark == "github", "per-source icon override")
+        let calendar = Calendar.current
+        let morning = AmbientRules.tomorrowMorning(calendar.date(bySettingHour: 23, minute: 30, second: 0, of: Date())!)
+        expect(calendar.component(.hour, from: morning) == 9 && !calendar.isDateInToday(morning), "pause until tomorrow is 9:00")
+        var state = AmbientState()
+        state.pausedUntil = AmbientTime.parse("2030-01-01T09:00:00Z")
+        state.save()
+        expect(AmbientState.load().pausedUntil == state.pausedUntil, "pause survives a restart")
     }
 
     private static func ages() {

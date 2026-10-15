@@ -139,18 +139,26 @@ struct AmbientError: Error, CustomStringConvertible {
 enum AmbientKeychain {
     static let service = "pager.ambient"
 
-    static func read(_ account: String) -> String? {
-        let query: [String: Any] = [
+    enum Read { case key(String), missing, needsApproval }
+
+    /// The overlay reads without UI: a rebuilt binary has a new signature, and
+    /// the Keychain's "allow access?" dialog would freeze the overlay until
+    /// someone clicks it. It reports `needsApproval` instead.
+    static func read(_ account: String, interactive: Bool = false) -> Read {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if !interactive { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty else { return nil }
-        return key
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecInteractionNotAllowed || status == errSecAuthFailed { return .needsApproval }
+        guard status == errSecSuccess, let data = item as? Data,
+              let key = String(data: data, encoding: .utf8), !key.isEmpty else { return .missing }
+        return .key(key)
     }
 
     /// An empty key deletes the item.
@@ -215,7 +223,7 @@ enum AmbientCredentials {
         if let file = connection.keyFile, let key = fromFile(file, name: connection.keyVar ?? readKeyVar) {
             return (key, "key file")
         }
-        if keychain, let key = AmbientKeychain.read(connection.id) { return (key, "Keychain") }
+        if keychain, case .key(let key) = AmbientKeychain.read(connection.id) { return (key, "Keychain") }
         return nil
     }
 }

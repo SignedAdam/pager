@@ -35,7 +35,9 @@ struct AmbientSettingsView: View {
             HStack {
                 Text("Ambient").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Toggle("Paused", isOn: $store.paused).toggleStyle(.checkbox)
+                Toggle("Paused", isOn: Binding(get: { store.paused },
+                                               set: { $0 ? store.pause(until: nil) : store.resume() }))
+                    .toggleStyle(.checkbox)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 7) {
@@ -103,6 +105,7 @@ struct AmbientSettingsView: View {
                 Toggle("Details", isOn: $store.settings.details).disabled(!store.settings.cards)
             }.toggleStyle(.checkbox)
             HStack(spacing: 12) {
+                Toggle("Source icons", isOn: $store.settings.sourceIcons)
                 Toggle("Ages", isOn: $store.settings.ages)
                 Toggle("Middle-click dismisses", isOn: $store.settings.middleClick)
             }.toggleStyle(.checkbox)
