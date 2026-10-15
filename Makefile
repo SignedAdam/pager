@@ -15,7 +15,8 @@ DIM        := \033[2m
 OFF        := \033[0m
 
 .PHONY: help build install uninstall reinstall release tour demo sounds examples \
-        log stats follow browse clean check test watch panels kill shots tarball readme
+        log stats follow browse clean check test watch panels kill shots tarball readme \
+        ambient hub-test
 
 help: ## show this
 	@printf '\n  $(ACCENT)pager$(OFF)  $(DIM)a floating notification panel anything can raise$(OFF)\n\n'
@@ -91,11 +92,19 @@ stats: $(BIN) ## what calls pager, and how the panels end
 
 # ------------------------------------------------------------------- checking
 
-check: ## syntax check every script and the Swift source
+check: $(BIN) ## syntax check every script, typecheck the Swift, run the ambient selftest
 	@bash -n install.sh && printf '  install.sh  ok\n'
 	@bash -n tour/tour.sh && printf '  tour.sh     ok\n'
 	@for f in examples/*.sh; do bash -n $$f && printf '  %-11s ok\n' "$$(basename $$f)"; done
-	@swiftc -typecheck $(SWIFTFLAGS) $(SRC) $(FRAMEWORKS) && printf '  Pager.swift ok\n'
+	@python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' tools/mock-hub.py && printf '  mock-hub.py ok\n'
+	@swiftc -typecheck $(SWIFTFLAGS) $(SRC) $(FRAMEWORKS) && printf '  src/*.swift ok\n'
+	@$(BIN) ambient --selftest
+
+ambient: $(BIN) ## run the ambient overlay in the foreground
+	@$(BIN) ambient
+
+hub-test: $(BIN) ## drive the ambient client against tools/mock-hub.py, no screen needed beyond a few lines
+	@bash tools/ambient-e2e.sh
 
 readme: ## check the README against the actual program
 	@python3 tools/validate-readme.py
