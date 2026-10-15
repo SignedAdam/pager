@@ -121,7 +121,8 @@ class Client:
         return http.client.HTTPConnection(self.host, self.port, timeout=t)
 
     def url(self, rel, params=None):
-        p = self.path + rel
+        # "/" in the protocol means the base URL itself: no trailing slash.
+        p = self.path + ("" if rel == "/" else rel)
         if params:
             p += "?" + urlencode(params)
         return p
@@ -262,9 +263,9 @@ class SSE:
 def is_error_shape(r, status, code=None):
     if r.status != status:
         return "expected HTTP %d, got %s" % (status, r.short())
-    e = (r.json or {}).get("error") if isinstance(r.json, dict) else None
-    if not isinstance(e, dict) or not isinstance(e.get("code"), str) or not isinstance(e.get("message"), str):
-        return "expected {\"error\":{\"code\",\"message\"}}, got %s" % r.short()
+    e = r.json if isinstance(r.json, dict) else None
+    if not e or not isinstance(e.get("code"), str) or not isinstance(e.get("message"), str):
+        return "expected {\"code\",\"message\"}, got %s" % r.short()
     if code and e["code"] != code:
         return "expected error code %r, got %r (%s)" % (code, e["code"], e["message"])
     return None
@@ -282,7 +283,7 @@ def check_event(ev, reader_side):
     if reader_side:
         expect("dismissed_at" in ev, "reader-side event lacks dismissed_at")
     else:
-        expect("dismissed_at" not in ev, "publish response must not carry dismissed_at")
+        expect(ev.get("dismissed_at") is None, "publish response must not carry a dismissal")
 
 
 class Run:
@@ -403,11 +404,11 @@ class Run:
         self.check("GET /info with reader key: reader, name, sources, features, docs", rinfo)
 
         r = self.list(self.a.publish_key)
-        self.check("publish key on GET / → 403 wrong_key_kind",
-                   lambda: expect(not is_error_shape(r, 403, "wrong_key_kind"), is_error_shape(r, 403, "wrong_key_kind")))
+        self.check("publish key on GET / → 403",
+                   lambda: expect(not is_error_shape(r, 403), is_error_shape(r, 403)))
         r = self.cl.req("POST", "/", self.a.reader_key, body={"type": self.type, "text": "x"})
-        self.check("reader key on POST / → 403 wrong_key_kind",
-                   lambda: expect(not is_error_shape(r, 403, "wrong_key_kind"), is_error_shape(r, 403, "wrong_key_kind")))
+        self.check("reader key on POST / → 403",
+                   lambda: expect(not is_error_shape(r, 403), is_error_shape(r, 403)))
         s = SSE(self.cl, self.a.publish_key)
         def pk_stream():
             expect(s.status == 403, "publish key on /stream: expected 403, got %s" % s.status)
@@ -472,7 +473,6 @@ class Run:
             ("display.period 20", {"type": self.type, "text": "x", "display": {"period": 20}}, None),
             ("data not an object", {"type": self.type, "text": "x", "data": [1, 2]}, None),
             ("idempotency_key over 128", {"type": self.type, "text": "x", "idempotency_key": "k" * 129}, None),
-            ("source in body", {"type": self.type, "text": "x", "source": self.source or "x"}, "source_from_key"),
         ]
         def validation():
             bad = []
@@ -482,7 +482,17 @@ class Run:
                 if err:
                     bad.append("%s: %s" % (name, err))
             expect(not bad, "; ".join(bad))
-        self.check("invalid events → 400 with a message (%d cases incl. source_from_key)" % len(cases), validation)
+        self.check("invalid events → 400 with a message (%d cases)" % len(cases), validation)
+
+        def source_field():
+            r = self.cl.req("POST", "/", self.a.publish_key, body={"type": self.type, "text": "x", "source": "zz-not-mine"})
+            err = is_error_shape(r, 403, "source_mismatch")
+            expect(not err, "another source in the body: %s" % err)
+            r = self.cl.req("POST", "/", self.a.publish_key,
+                            body={"type": self.type, "text": "own source %s" % self.run, "source": self.source,
+                                  "severity": "debug", "display": {"lifetime": 1}})
+            expect(r.status == 201, "the key's own source in the body must be accepted: %s" % r.short())
+        self.check("source in body: own source accepted, another → 403 source_mismatch", source_field)
 
         def invalid_json():
             r = self.cl.req("POST", "/", self.a.publish_key, raw=b"{not json")
@@ -587,8 +597,8 @@ class Run:
         r = self.cl.req("GET", "/sources", self.a.reader_key)
         def ok():
             expect(r.status == 200, r.short())
-            srcs = (r.json or {}).get("sources")
-            expect(isinstance(srcs, list), "expected {\"sources\":[…]}")
+            srcs = r.json
+            expect(isinstance(srcs, list), "expected a JSON array of sources")
             mine = [s for s in srcs if s.get("slug") == self.source]
             expect(mine, "source %r missing" % self.source)
             s = mine[0]
@@ -599,7 +609,7 @@ class Run:
         self.check("GET /sources lists the granted source with all fields", ok)
         r2 = self.cl.req("GET", "/sources", self.a.publish_key)
         self.check("publish key on /sources → 403",
-                   lambda: expect(not is_error_shape(r2, 403, "wrong_key_kind"), is_error_shape(r2, 403, "wrong_key_kind")))
+                   lambda: expect(not is_error_shape(r2, 403), is_error_shape(r2, 403)))
 
     def dismiss(self):
         self.out.section("dismiss and sticky")
@@ -652,7 +662,7 @@ class Run:
         self.check("dismiss unknown id → 404", lambda: expect(not is_error_shape(r, 404), is_error_shape(r, 404)))
         r = self.cl.req("POST", "/%s/dismiss" % quote(ev["id"]), self.a.publish_key)
         self.check("publish key on dismiss → 403",
-                   lambda: expect(not is_error_shape(r, 403, "wrong_key_kind"), is_error_shape(r, 403, "wrong_key_kind")))
+                   lambda: expect(not is_error_shape(r, 403), is_error_shape(r, 403)))
 
     def streaming(self):
         self.out.section("stream")
@@ -793,7 +803,7 @@ class Run:
                    lambda: expect(r2.status in (403, 404) and not is_error_shape(r2, r2.status), r2.short()))
         r3 = self.cl.req("GET", "/sources", R3)
         self.check("/sources omits the not-granted source",
-                   lambda: expect(r3.status == 200 and self.source not in [x.get("slug") for x in r3.json["sources"]], r3.short()))
+                   lambda: expect(r3.status == 200 and isinstance(r3.json, list) and self.source not in [x.get("slug") for x in r3.json], r3.short()))
         s3.close()
         sR.close()
 
@@ -874,7 +884,9 @@ class Run:
         expect(s.status == 200, "stream: HTTP %s" % s.status)
         f = s.next(lambda f: f["event"] in ("gap", "event"), 10)
         expect(f is not None and f["event"] == "gap", "first frame must be `gap`, got %r" % (f and f["event"]))
-        expect(isinstance(f["data"].get("missed"), int) and f["data"]["missed"] >= 10, "gap.missed: %r" % f["data"])
+        d = f["data"]
+        expect(isinstance(d.get("skipped"), int) and d["skipped"] >= 10 and d.get("after") == cursor
+               and isinstance(d.get("resume"), str), "gap data must be {after, skipped, resume}: %r" % d)
         n = len([x for x in s.collect(5) if x["event"] == "event"])
         expect(n == 1000, "expected exactly 1000 replayed events after the gap, got %d" % n)
         s.close()

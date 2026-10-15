@@ -143,7 +143,7 @@ class HubTest(unittest.TestCase):
         self.assertFalse(s.thread.is_alive(), "stream of a revoked key stayed open")
         r = self.c.req("GET", "/info", k)
         self.assertEqual(r.status, 401)
-        self.assertEqual(r.json["error"]["code"], "unauthorized")
+        self.assertEqual(r.json["code"], "unauthorized")
 
     def test_rotate_keeps_reader_identity_and_dismiss_state(self):
         old = cli(self.db, "key", "reader", "erin", "--sources", "deploys").stdout.strip()
@@ -195,8 +195,8 @@ class HubTest(unittest.TestCase):
         cli(self.db, "source", "archive", "tmp-src")
         r = self.c.req("POST", "/", k, body={"type": "x", "text": "after"})
         self.assertEqual(r.status, 403)
-        self.assertEqual(r.json["error"]["code"], "source_archived")
-        slugs = [x["slug"] for x in self.c.req("GET", "/sources", self.R).json["sources"]]
+        self.assertEqual(r.json["code"], "source_archived")
+        slugs = [x["slug"] for x in self.c.req("GET", "/sources", self.R).json]
         self.assertNotIn("tmp-src", slugs)
 
     def test_prune_respects_retention(self):
@@ -235,7 +235,9 @@ class HubTest(unittest.TestCase):
         self.assertEqual(s.status, 200)
         first = s.next(lambda f: f["event"] in ("gap", "event"), 5)
         self.assertEqual(first["event"], "gap")
-        self.assertEqual(first["data"], {"missed": 234})
+        self.assertEqual(first["data"]["skipped"], 234)
+        self.assertEqual(first["data"]["after"], str(start))
+        self.assertEqual(first["data"]["resume"], str(start + 234))
         evs = [f for f in s.collect(3) if f["event"] == "event"]
         s.close()
         self.assertEqual(len(evs), 1000)
@@ -256,7 +258,7 @@ class HubTest(unittest.TestCase):
             r = self.c.req("POST", "/", k, body={"type": "rate.x", "text": "r", "idempotency_key": "same"})
             statuses.append(r.status)
             if r.status == 429:
-                self.assertEqual(r.json["error"]["code"], "rate_limited")
+                self.assertEqual(r.json["code"], "rate_limited")
                 self.assertGreaterEqual(int(r.header("Retry-After")), 1)
                 break
         self.assertEqual(statuses.count(429), 1)
@@ -295,11 +297,11 @@ class HubTest(unittest.TestCase):
 
     def test_error_messages_say_what_to_fix(self):
         r = self.c.req("POST", "/", self.P, body={"type": "x", "text": "t" * 301})
-        self.assertEqual(r.json["error"]["message"], "text: 301 characters; the limit is 300 (put the rest in detail)")
+        self.assertEqual(r.json["message"], "text: 301 characters; the limit is 300 (put the rest in detail)")
         r = self.c.req("POST", "/", self.P, body={"type": "x", "text": "t", "display": {"effect": "spin"}})
-        self.assertIn("display.effect: must be one of none | blink", r.json["error"]["message"])
+        self.assertIn("display.effect: must be one of none | blink", r.json["message"])
         r = self.c.req("POST", "/batch", self.P, body={"events": [{"type": "x", "text": "ok"}, {"type": "x"}]})
-        self.assertTrue(r.json["error"]["message"].startswith("events[1].text"), r.json)
+        self.assertTrue(r.json["message"].startswith("events[1].text"), r.json)
 
 
 KEY_SECRET = 12  # characters after the shown prefix must never be stored

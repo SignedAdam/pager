@@ -125,7 +125,7 @@ class ApiError(Exception):
         self.headers = headers or {}
 
     def body(self):
-        return {"error": {"code": self.code, "message": self.message}}
+        return {"ok": False, "error": self.code.replace("_", "-"), "code": self.code, "message": self.message}
 
 
 def bad(code, message):
@@ -311,15 +311,16 @@ def validate_display(d, where):
     return out
 
 
-def validate_event(obj, now, where=""):
+def validate_event(obj, now, where="", own_source=None):
     """Check a publish body. Returns clean fields or raises ApiError(400)."""
     if not isinstance(obj, dict):
         raise bad("invalid_json", "%sthe event must be a JSON object" % (where or "body: "))
-    if "source" in obj:
-        raise ApiError(400, "source_from_key",
-                       "%ssource: not allowed in the body; the source comes from the publish key" % where)
+    if "source" in obj and obj["source"] != own_source:
+        raise ApiError(403, "source_mismatch",
+                       "%ssource: this key publishes only to '%s'; leave source out, it comes from the key"
+                       % (where, own_source))
     for k in obj:
-        if k not in EVENT_FIELDS:
+        if k not in EVENT_FIELDS and k != "source":
             raise bad("unknown_field", "%s%s: unknown field; allowed: %s" % (where, k, ", ".join(EVENT_FIELDS)))
 
     t = obj.get("type")
@@ -893,7 +894,7 @@ class Handler(BaseHTTPRequestHandler):
             log("error on %s %s: %r" % (method, path, e))
             self.close_connection = True
             try:
-                self.send_json(500, {"error": {"code": "internal", "message": "internal error"}})
+                self.send_json(500, {"ok": False, "error": "internal", "code": "internal", "message": "internal error"})
             except Exception:
                 pass
 
@@ -934,7 +935,7 @@ class Handler(BaseHTTPRequestHandler):
             raise
         body = self.json_body()
         self.rate_check(p, 1)
-        clean = validate_event(body, utcnow())
+        clean = validate_event(body, utcnow(), own_source=p.source)
         (row, created), = publish_events(self.hub.conn(), p.source, [clean], utcnow())
         if created:
             self.hub.poke()
@@ -957,7 +958,7 @@ class Handler(BaseHTTPRequestHandler):
             raise bad("invalid_field", "events: send 1..%d events per batch" % MAX_BATCH)
         self.rate_check(p, int(math.ceil(len(events) / float(BATCH_EVENTS_PER_TOKEN))))
         now = utcnow()
-        cleans = [validate_event(ev, now, "events[%d]." % i) for i, ev in enumerate(events)]
+        cleans = [validate_event(ev, now, "events[%d]." % i, own_source=p.source) for i, ev in enumerate(events)]
         results = publish_events(self.hub.conn(), p.source, cleans, now)
         created = any(c for _, c in results)
         if created:
@@ -1049,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
                 "FROM sources s WHERE s.slug = ?", (since, slug)).fetchone()
             out.append({"slug": s["slug"], "name": s["name"], "color": s["color"],
                         "last_event_at": s["last_event_at"], "count_24h": s["count_24h"]})
-        self.send_json(200, {"sources": out})
+        self.send_json(200, out)
 
     def r_info(self, qs):
         p = authenticate(self.hub.conn(), self.headers.get("Authorization"))
@@ -1176,7 +1177,8 @@ class Handler(BaseHTTPRequestHandler):
             " ORDER BY e.seq DESC LIMIT ?", [p.reader_id] + params + [REPLAY_MAX]).fetchall()
         rows.reverse()
         if missed > REPLAY_MAX:
-            w.write(("event: gap\ndata: %s\n\n" % json.dumps({"missed": missed - REPLAY_MAX})).encode("utf-8"))
+            w.write(("event: gap\ndata: %s\n\n" % json.dumps({"after": str(after), "skipped": missed - REPLAY_MAX,
+                                                         "resume": str(rows[0]["seq"] - 1)})).encode("utf-8"))
         last = after
         for r in rows:
             payload = json.dumps(event_json(r, r["dismissed_at"]), separators=(",", ":"), ensure_ascii=False)
@@ -1521,7 +1523,7 @@ same order. The batch is all or nothing: one invalid event rejects the batch wit
 | 429 | rate limited; wait `Retry-After` seconds | retry later or drop |
 | 5xx | hub trouble | retry with backoff, then drop |
 
-Errors look like `{"error":{"code":"invalid_field","message":"text: 341 characters; the limit is 300 (put the rest in detail)"}}`.
+Errors look like `{"ok":false,"error":"invalid-field","code":"invalid_field","message":"text: 341 characters; the limit is 300 (put the rest in detail)"}`.
 
 ## Limits on this hub
 
@@ -1543,8 +1545,8 @@ the sources the admin granted it.
   `before=<cursor>` (page back with `next_before`), `after=<cursor>` (oldest first, for catch-up; page forward with
   the last cursor until fewer than `limit` come back), `sticky=open`.
 - `GET {BASE}/stream`: Server-Sent Events. Resume with `Last-Event-ID` or `?after=<cursor>`. Frames: `event`,
-  `state` (your own dismissals from another device), `gap` (`{"missed": n}`: more than {REPLAY} events were
-  missed; `n` were skipped). A `: keepalive` comment arrives every {KEEPALIVE} s; reconnect after 60 s of silence.
+  `state` (your own dismissals from another device), `gap` (`{"after","skipped","resume"}`: more than {REPLAY} events were
+  missed; `skipped` of them were not replayed). A `: keepalive` comment arrives every {KEEPALIVE} s; reconnect after 60 s of silence.
 - `POST {BASE}/<id>/dismiss` and `DELETE {BASE}/<id>/dismiss`: your dismissal, per reader, not global.
 
 ```sh
@@ -1863,7 +1865,7 @@ def cmd_send(a):
     if not conn.execute("SELECT 1 FROM sources WHERE slug = ?", (a.source,)).fetchone():
         raise AdminError("no source '%s'" % a.source)
     try:
-        clean = validate_event(body, utcnow())
+        clean = validate_event(body, utcnow(), own_source=a.source)
         (row, created), = publish_events(conn, a.source, [clean], utcnow())
     except ApiError as e:
         raise AdminError(e.message)
