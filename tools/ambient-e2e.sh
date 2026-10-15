@@ -88,7 +88,7 @@ check "selftest passes" "\"$PAGER\" ambient --selftest >/dev/null"
 start_hub
 check "hub /info with reader key" "curl -s -H 'Authorization: Bearer read-test' $BASE/info | grep -q '\"key\": \"reader\"'"
 check "publish key on a reader route is 403" "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer pub-test' $BASE)\" = 403 ]"
-check "source in body is 400" "publish '{\"type\":\"x\",\"text\":\"t\",\"source\":\"other\"}' | grep -q source_from_key"
+check "another source in the body is 403" "publish '{\"type\":\"x\",\"text\":\"t\",\"source\":\"other\"}' | grep -q source_mismatch"
 
 # --------------------------------------------------------------- local mode
 out=$("$PAGER" event --source test --text "**offline** line" --lifetime sticky 2>&1)
