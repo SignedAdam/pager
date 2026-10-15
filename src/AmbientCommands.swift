@@ -195,6 +195,7 @@ enum AmbientCommands {
         } else {
             line("last event", "none yet")
         }
+        if let middle = reply?["middle_click"] as? String { line("click", "middle-click " + middle) }
         if let reply { line("on screen", "\(reply["visible"] as? Int ?? 0) line(s), \(reply["history"] as? Int ?? 0) in history") }
         print("")
         return 0

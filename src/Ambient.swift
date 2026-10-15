@@ -881,7 +881,10 @@ final class AmbientPanel: NSPanel {
     private func handle(_ request: [String: Any]) -> [String: Any] {
         switch request["op"] as? String ?? "" {
         case "ping", "status":
-            return store.status().merging(["ok": true], uniquingKeysWith: { $1 })
+            return store.status().merging(["ok": true,
+                                           "middle_click": !store.settings.middleClick ? "off"
+                                               : middleClickTap != nil ? "on" : "needs Accessibility"],
+                                          uniquingKeysWith: { $1 })
         case "event":
             guard let object = request["event"],
                   let data = try? JSONSerialization.data(withJSONObject: object),

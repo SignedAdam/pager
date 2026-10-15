@@ -16,7 +16,7 @@ OFF        := \033[0m
 
 .PHONY: help build install uninstall reinstall release tour demo sounds examples \
         log stats follow browse clean check test watch panels kill shots tarball readme \
-        ambient hub-test
+        ambient hub-test signing
 
 help: ## show this
 	@printf '\n  $(ACCENT)pager$(OFF)  $(DIM)a floating notification panel anything can raise$(OFF)\n\n'
@@ -31,6 +31,7 @@ build: $(BIN) ## compile bin/pager
 $(BIN): $(SRC)
 	@mkdir -p $(dir $@)
 	@swiftc -O $(SWIFTFLAGS) -o $(BIN) $(SRC) $(FRAMEWORKS)
+	@./tools/local-sign.sh $(BIN)
 	@printf '  $(ACCENT)built$(OFF)  $(BIN)  $(DIM)%s$(OFF)\n' "$$(du -h $(BIN) | cut -f1)"
 
 install: ## build, link onto PATH, link the skill, start the tour
@@ -99,6 +100,9 @@ check: $(BIN) ## syntax check every script, typecheck the Swift, run the ambient
 	@python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' tools/mock-hub.py && printf '  mock-hub.py ok\n'
 	@swiftc -typecheck $(SWIFTFLAGS) $(SRC) $(FRAMEWORKS) && printf '  src/*.swift ok\n'
 	@$(BIN) ambient --selftest
+
+signing: ## make a local signing identity so macOS permissions survive rebuilds
+	@./tools/local-sign.sh --setup
 
 ambient: $(BIN) ## run the ambient overlay in the foreground
 	@$(BIN) ambient
