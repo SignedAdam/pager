@@ -205,6 +205,9 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
     var source: String
     var sourceName: String?
     var sourceColor: String?
+    /// The source's mark, chosen by the hub: a brand slug (`stripe`, `github`)
+    /// or an SF Symbol name. Beats guessing from the name.
+    var sourceIcon: String?
     var type: String?
     var severity: String?
     var text: String
@@ -222,7 +225,7 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, cursor, source, type, severity, text, detail, subject, url, display, origin, connection
-        case sourceName = "source_name", sourceColor = "source_color"
+        case sourceName = "source_name", sourceColor = "source_color", sourceIcon = "source_icon"
         case occurredAt = "occurred_at", receivedAt = "received_at", dismissedAt = "dismissed_at"
     }
 
@@ -248,6 +251,7 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
         source = string(.source) ?? "unknown"
         sourceName = string(.sourceName)
         sourceColor = string(.sourceColor)
+        sourceIcon = string(.sourceIcon)
         type = string(.type)
         severity = string(.severity)
         text = string(.text) ?? ""
@@ -269,6 +273,7 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
         try c.encode(source, forKey: .source)
         try c.encodeIfPresent(sourceName, forKey: .sourceName)
         try c.encodeIfPresent(sourceColor, forKey: .sourceColor)
+        try c.encodeIfPresent(sourceIcon, forKey: .sourceIcon)
         try c.encodeIfPresent(type, forKey: .type)
         try c.encodeIfPresent(severity, forKey: .severity)
         try c.encode(text, forKey: .text)
@@ -502,7 +507,8 @@ enum AmbientRules {
         // No known mark: a monogram (the "n" of Narkis in a circle), so the
         // column keeps its rhythm.
         var brand = AmbientBrand.find(event) ?? AmbientBrand.monogram(event.label)
-        if let icon = source?.icon?.trimmingCharacters(in: .whitespaces), !icon.isEmpty {
+        // Your own icon for the source wins, then the hub's, then the name guess.
+        if let icon = (source?.icon ?? event.sourceIcon)?.trimmingCharacters(in: .whitespaces), !icon.isEmpty {
             let known = AmbientBrand.known[icon]
             brand = AmbientBrand(mark: known?.mark ?? (AmbientMarks.file(icon) != nil ? icon : nil),
                                  symbol: known?.symbol ?? (AmbientMarks.file(icon) == nil ? icon : nil),

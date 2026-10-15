@@ -46,6 +46,9 @@ enum AmbientSelfTest {
         settings.sources["coolify"] = SourceOverride(icon: "github")
         let look = AmbientRules.resolve(AmbientEvent(id: "c", source: "coolify", text: "x"), settings)
         expect(look.brand?.mark == "github", "per-source icon override")
+        var hinted = AmbientEvent(id: "h", source: "narkis", text: "x")
+        hinted.sourceIcon = "stripe"
+        expect(AmbientRules.resolve(hinted, AmbientSettings()).brand?.mark == "stripe", "hub source_icon picks the mark")
         let calendar = Calendar.current
         let morning = AmbientRules.tomorrowMorning(calendar.date(bySettingHour: 23, minute: 30, second: 0, of: Date())!)
         expect(calendar.component(.hour, from: morning) == 9 && !calendar.isDateInToday(morning), "pause until tomorrow is 9:00")

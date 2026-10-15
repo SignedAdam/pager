@@ -30,6 +30,7 @@ A publish key used on a reader route, or the reverse, gets 403 (code `wrong_key_
   "source": "deploys",             // slug [a-z0-9-]{2,48}
   "source_name": "Deploys",        // display label
   "source_color": "#c7ff00",       // or null
+  "source_icon": "stripe",         // or null; a Simple Icons slug or an SF Symbol name
   "type": "deploy.failed",         // [a-z0-9._-]{1,48}
   "severity": "error",             // debug | info | notice | warn | error | critical
   "text": "**api** failed on `main`",  // ≤ 300 chars; inline markdown: **bold**, *italic*, `code`
@@ -130,3 +131,20 @@ Streams: 8 concurrent per reader key (the next one gets 429 `too_many_streams`).
 - 2026-10-15: aligned with the first production hub (Citadel): errors are flat `{code, message}`; `source` in the
   body tolerated when it matches the key; `gap` carries `{after, skipped, resume}`; `/sources` is a bare array;
   dismiss may answer the full event; cursor-less streams are live only.
+
+## Introducing a source
+
+A source is what a reader sees in the left column, so name it for the person reading, not for the pipe it came
+through. Set three things when you create one:
+
+- **name**: the service or product as people know it ("Stripe", "GitHub", "Coolify", "Narkis"). Put the
+  sub-system in `subject` ("narkis.ai", "api · production"), not in the name.
+- **icon**: the mark readers draw beside it, sent as `source_icon`. A [Simple Icons](https://simpleicons.org)
+  slug (`stripe`, `github`, `vercel`, `sentry`, `cloudflare`…) or an SF Symbol name (`shippingbox.fill`).
+  Leave it empty for your own product and readers draw a monogram.
+- **color**: the brand colour as `#rrggbb` (Simple Icons lists them). Readers lighten near-black colours on dark
+  backgrounds themselves; send the real one.
+
+One source per service a person would recognise. Events about the same thing from two services (a sale seen by
+Stripe and by your app) belong to whichever one the reader should think of first; never publish both.
+
