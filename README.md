@@ -430,6 +430,8 @@ pager event --hub https://hub.example.com/v1/events --key "$PAGER_AMBIENT_PUBLIS
 
 Events from a hub are data. They are shown, filtered and stored, and nothing in them is ever run. A link opens only when you click it in the history window.
 
+To run your own hub, use the reference one in [`hub/`](hub/README.md): one Python file on SQLite, no dependencies, with a Dockerfile. You add sources, hand each publisher a key bound to its source, and hand each person a reader key granted only the sources they may see, so a company can share some streams and keep others. If you build a hub on your own stack instead, `python3 hub/conformance.py <base url> --publish-key … --reader-key …` tells you whether it speaks the protocol.
+
 ### Settings, history, running at login
 
 The menu bar icon has Pause, Clear screen, History, Settings and Demo burst. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is searchable and filters by hub, source and severity; `pager log --window` lists ambient events too.
@@ -457,7 +459,7 @@ Useful development commands:
 make             # list available targets
 make build       # compile bin/pager
 make check       # check Swift and shell syntax, run the ambient selftest
-make hub-test    # drive the ambient overlay against tools/mock-hub.py
+make hub-test    # test hub/, then drive the ambient overlay against tools/mock-hub.py
 make test        # exercise the walkthrough with a stub pager
 make demo        # display a panel with representative content
 make shots       # regenerate docs screenshots

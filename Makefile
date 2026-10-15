@@ -103,7 +103,8 @@ check: $(BIN) ## syntax check every script, typecheck the Swift, run the ambient
 ambient: $(BIN) ## run the ambient overlay in the foreground
 	@$(BIN) ambient
 
-hub-test: $(BIN) ## drive the ambient client against tools/mock-hub.py, no screen needed beyond a few lines
+hub-test: $(BIN) ## test the reference hub, then drive the ambient client against tools/mock-hub.py
+	@python3 hub/test_hub.py
 	@bash tools/ambient-e2e.sh
 
 readme: ## check the README against the actual program
