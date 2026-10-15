@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+**Ambient stream.** `pager ambient` keeps a quiet, click-through stream of
+one-line events in a corner of the screen: source on the left, message on the
+right, a live age (`now`, `12s`, `4m`), gone after 60 seconds by default or
+sticky until middle-clicked. Text first, with optional cards, icons, backdrop
+and, on macOS 15, effects. Menu bar item, a compact settings window and a
+searchable history window; `pager log --window` lists ambient events too.
+
+**`pager event`** puts a line on it from any script, over a local socket, with
+no server. With `--hub` it publishes to a hub instead.
+
+**Hubs.** Any server speaking the [Ambient protocol](docs/protocol.md) can feed
+the stream. `pager ambient connect <url> --key <reader key>` checks the hub's
+`/info` and keeps the key in the Keychain; several hubs merge into one stream.
+The client resumes with `Last-Event-ID`, backs off with jitter, reconnects after
+60 silent seconds or a wake from sleep, restores open stickies, and syncs
+dismissals per reader. Catch-up never replays a burst: only lines still inside
+their lifetime return, without animation. Hub events are data and never run
+anything.
+
+**Running it.** `--install` adds a LaunchAgent that starts at login and restarts
+after a crash; `--status`, `--demo` and `--selftest` do what they say.
+
+**Build.** The program is now every file in `src/`: `Pager.swift` (the panel,
+unchanged in behaviour) and `Ambient*.swift`. Still no dependencies, still
+macOS 13. `make check` runs the ambient selftest; `make hub-test` drives the
+overlay against `tools/mock-hub.py`, a small stdlib hub for tests.
+
 ## 1.0.0
 
 First public release.

@@ -250,3 +250,21 @@ caller in and wanting to confirm it landed.
 
 `pager log --window` opens a window for the user to read. Do not use it to get
 data; pipe the command instead.
+
+## Ambient lines: for news, not for questions
+
+`pager event` puts one quiet line in the user's ambient stream (if they run
+`pager ambient`). It never blocks, has no buttons, and fades after a minute.
+Use it for progress and outcomes the user may glance at: a build finished, a
+long task moved on, something was deployed. Use a panel instead when the user
+must see it, answer it, or act on it.
+
+```bash
+pager event --source "claude code" --text "tests **green** on \`feature/login\`"
+pager event --source deploy --severity error --lifetime sticky \
+  --text "**api** failed on production" --url "https://ci.example.com/run/812"
+```
+
+One line per meaningful moment, never one per step. `--lifetime sticky` keeps
+it until the user dismisses it; keep that for states that stay true (a site is
+down). It is safe to call when nothing is running: the line goes to history.

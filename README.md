@@ -3,7 +3,7 @@
 # pager
 
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-000?logo=apple&logoColor=white)](#install)
-[![Swift](https://img.shields.io/badge/Swift-one%20file-F05138?logo=swift&logoColor=white)](src/Pager.swift)
+[![Swift](https://img.shields.io/badge/Swift-src%2F-F05138?logo=swift&logoColor=white)](src/)
 [![No dependencies](https://img.shields.io/badge/dependencies-none-c7ff00)](#install)
 [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -20,7 +20,7 @@ There is also a [narrated walkthrough on YouTube](https://www.youtube.com/watch?
 
 [![Narrated pager walkthrough on YouTube](https://img.youtube.com/vi/6LZSYOcZ9ic/maxresdefault.jpg)](https://www.youtube.com/watch?v=6LZSYOcZ9ic)
 
-Any program that can run a shell command can use it. That includes cron jobs, git hooks, deploy scripts, local CI, shell traps, and coding agents. There is no service or SDK to integrate. The program is a single Swift source file with no third-party dependencies.
+Any program that can run a shell command can use it. That includes cron jobs, git hooks, deploy scripts, local CI, shell traps, and coding agents. There is no service or SDK to integrate. The program is plain Swift with no third-party dependencies: the panel is one file, [`src/Pager.swift`](src/Pager.swift), and the optional [ambient stream](#ambient-stream) lives beside it.
 
 ## Install
 
@@ -32,7 +32,7 @@ cd pager
 ./install.sh
 ```
 
-The installer compiles `src/Pager.swift` and links the result to `~/.local/bin/pager`. If `swiftc` is unavailable, it uses the prebuilt universal binary in `dist/` instead. The prebuilt binary supports both Apple silicon and Intel Macs.
+The installer compiles the Swift files in `src/` and links the result to `~/.local/bin/pager`. If `swiftc` is unavailable, it uses the prebuilt universal binary in `dist/` instead. The prebuilt binary supports both Apple silicon and Intel Macs.
 
 Make sure `~/.local/bin` is on your `PATH`:
 
@@ -395,20 +395,69 @@ answered.
 
 The file rolls over to `log.jsonl.1` past four megabytes.
 
+## Ambient stream
+
+Panels are for things that need you. `pager ambient` is for everything else: a quiet stream of one-line events in a corner of the screen, there all day, fading on its own. Pushes, deploys, a sale, a site going down. Missing a line is fine; the history window is where you look things up.
+
+```sh
+pager ambient &                      # the overlay; a waveform appears in the menu bar
+pager event --source deploy --text "**api** deployed in \`38s\`"
+pager event --source uptime --text "status page **down**" --severity error --lifetime sticky
+```
+
+Each line is text only by default: the source in a left column, the message on the right, and its age (`now`, `12s`, `4m`, `3h`, `2d`). Lines go after 60 seconds unless the event, or your per-source settings, say otherwise. A `sticky` line stays until you middle-click it. The overlay never takes a click or keyboard focus; middle-click is read from a mouse monitor, and every other click goes through to whatever is underneath.
+
+`pager event` needs no server. It hands the line to the running overlay over a Unix socket and appends it to `~/.pager/events.jsonl`. Its options are listed by `pager ambient --help`: `--detail`, `--subject`, `--type`, `--severity`, `--lifetime <n|sticky>`, `--layout split|inline`, `--effect blink|flash|highlight|wave|gradient`, `--target`, `--period`, `--color`, `--lines`, `--url`.
+
+### Hubs
+
+To see events from servers, scripts and other machines, connect a hub. A hub is any server that speaks the small [Ambient protocol](docs/protocol.md): publishers `POST` events with a write-only key, readers stream them over server-sent events with a reader key. You can connect as many as you like, for example your own and your company's, and their lines merge into one stream.
+
+```sh
+pager ambient connect https://hub.example.com/v1/events --key <reader key> --name work
+pager ambient connections
+pager ambient disconnect work
+```
+
+`connect` checks the key against the hub's `/info`, shows which sources it may read, and keeps the key in the Keychain. The overlay holds one outbound connection per hub and resumes from the last event it saw, so sleep and network changes cost nothing. After a gap it catches up quietly: only lines still inside their lifetime come back, and they do not animate. Dismissing a line on one Mac dismisses it on your others, and only for you.
+
+To publish from a script to a hub instead of the local overlay:
+
+```sh
+pager event --hub https://hub.example.com/v1/events --key "$PAGER_AMBIENT_PUBLISH_KEY" \
+  --type deploy.failed --severity error --text "**api** failed on \`main\`"
+```
+
+Events from a hub are data. They are shown, filtered and stored, and nothing in them is ever run. A link opens only when you click it in the history window.
+
+### Settings, history, running at login
+
+The menu bar icon has Pause, Clear screen, History, Settings and Demo burst. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is searchable and filters by hub, source and severity; `pager log --window` lists ambient events too.
+
+```sh
+pager ambient --status      # running, each hub's connection and cursor, the last event
+pager ambient --demo        # play fifty sample events once, then stop
+pager ambient --install     # run at login and come back after a crash (LaunchAgent)
+pager ambient --uninstall
+```
+
+Effects (`blink`, `flash`, `highlight`, `wave`, `gradient`) need macOS 15. On 13 and 14 the same lines show without them.
+
 ## Security
 
-Commands supplied through `--action` and `--choose` are passed to `/bin/sh -c`. Treat them exactly like shell code. Never interpolate filenames, messages, branch names, clipboard contents, model output, or any other untrusted text into an action command. Pass fixed commands or validate and quote every value before constructing the option.
+Commands supplied through `--action` and `--choose` are passed to `/bin/sh -c`. The ambient stream has no equivalent: nothing in an event can run a command. Treat them exactly like shell code. Never interpolate filenames, messages, branch names, clipboard contents, model output, or any other untrusted text into an action command. Pass fixed commands or validate and quote every value before constructing the option.
 
 ## Build and contribute
 
-The implementation lives in [`src/Pager.swift`](src/Pager.swift). The shell examples are in [`examples/`](examples/), and screenshots are under [`docs/`](docs/).
+The panel lives in [`src/Pager.swift`](src/Pager.swift) and the ambient stream in `src/Ambient*.swift`. The shell examples are in [`examples/`](examples/), and screenshots are under [`docs/`](docs/).
 
 Useful development commands:
 
 ```sh
 make             # list available targets
 make build       # compile bin/pager
-make check       # check Swift and shell syntax
+make check       # check Swift and shell syntax, run the ambient selftest
+make hub-test    # drive the ambient overlay against tools/mock-hub.py
 make test        # exercise the walkthrough with a stub pager
 make demo        # display a panel with representative content
 make shots       # regenerate docs screenshots

@@ -26,13 +26,13 @@ Both run in CI on every push. If you changed anything about how a panel looks,
 also run `make shots` and commit the regenerated pictures, so the README never
 shows something the code no longer does.
 
-If you changed `src/Pager.swift`, run `make release` and commit `dist/pager`
+If you changed anything in `src/`, run `make release` and commit `dist/pager`
 too. That is the universal binary people without a compiler install, and CI
 fails if it is older than the source.
 
 ## How the code is laid out
 
-It is one Swift file, and it reads top to bottom in the order things happen.
+`src/Pager.swift` is the panel. It reads top to bottom in the order things happen.
 
 | | |
 |---|---|
@@ -48,6 +48,23 @@ It is one Swift file, and it reads top to bottom in the order things happen.
 **To add a field:** add a flag and one line in `Options.parse`, then one line in
 `build`. That is the whole extension story, and it is deliberate. There is no
 plugin system and no config schema.
+
+The ambient stream sits beside it and the panel never calls into it, apart from
+the two words `ambient` and `event` at the entry point:
+
+| | |
+|---|---|
+| `AmbientModel.swift` | the event record, settings, lifetime rules, the SSE parser, history files. No UI |
+| `AmbientFeed.swift` | the local socket, Keychain, and one SSE client per hub |
+| `Ambient.swift` | the store, the overlay views, the menu bar app, middle-click |
+| `AmbientEffects.swift` | styled text, and the macOS 15 TextRenderer effects |
+| `AmbientWindows.swift` | the settings and history windows |
+| `AmbientCommands.swift` | `pager ambient ...` and `pager event` |
+| `AmbientSelfTest.swift` | `pager ambient --selftest`, run by `make check` |
+
+The wire format is [docs/protocol.md](docs/protocol.md). If you change what the
+client sends or expects, change the protocol doc and `tools/mock-hub.py` with
+it, and run `make hub-test`. It draws a few short test lines on screen.
 
 ## Two rules
 
