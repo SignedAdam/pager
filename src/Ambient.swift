@@ -52,10 +52,11 @@ struct AmbientLine: Identifiable, Equatable {
     private var stateSave: DispatchWorkItem?
     let historyLimit = 2000
 
-    init(settings: AmbientSettings = AmbientSettings.load(), state: AmbientState = AmbientState.load()) {
+    init(settings: AmbientSettings = AmbientSettings.load(), state: AmbientState = AmbientState.load(),
+         loadHistory: Bool = true) {
         self.settings = settings
         self.state = state
-        history = Array(AmbientHistory.load(limit: historyLimit).reversed())
+        history = loadHistory ? Array(AmbientHistory.load(limit: historyLimit).reversed()) : []
         seen = Set(history.map(\.key))
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -379,11 +380,13 @@ private struct AmbientRowFrames: PreferenceKey {
 
 struct AmbientOverlay: View {
     @ObservedObject var store: AmbientStore
+    var blur = true
 
     var body: some View {
         let s = store.settings
         let top = s.corner.hasPrefix("top"), right = s.corner.hasSuffix("right")
         let ordered = top ? store.lines : Array(store.lines.reversed())
+        let corner: Alignment = top ? (right ? .topTrailing : .topLeading) : (right ? .bottomTrailing : .bottomLeading)
         VStack(alignment: right ? .trailing : .leading, spacing: s.rowGap) {
             ForEach(ordered) { line in
                 AmbientRow(line: line, settings: s, right: right)
@@ -400,14 +403,89 @@ struct AmbientOverlay: View {
                     .transition(.opacity)
             }
         }
-        .padding(12)
+        .background(AmbientShade(strength: s.shade, visible: !store.lines.isEmpty && !s.backdrop, corner: corner, blur: blur))
+        // The panel reaches the screen edge; the stack sits 12 pt in from it as
+        // before, with room on the open sides for the shade to fade out.
+        .padding(top ? .top : .bottom, 12)
+        .padding(right ? .trailing : .leading, 12)
+        .padding(top ? .bottom : .top, AmbientShadeGeometry.margin)
+        .padding(right ? .leading : .trailing, AmbientShadeGeometry.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity,
-               alignment: top ? (right ? .topTrailing : .topLeading) : (right ? .bottomTrailing : .bottomLeading))
+               alignment: corner)
         .coordinateSpace(name: "ambient")
         .onPreferenceChange(AmbientRowFrames.self) { frames in
             Task { @MainActor in store.rowFrames = frames }
         }
         .environment(\.colorScheme, .dark)
+    }
+}
+
+/// The shade: frosted dark glass behind the lines that fades to nothing at
+/// its edges. The blur turns whatever is underneath (a page of text, a photo)
+/// into a soft tone, so the lines never fight another layer of text; the tint
+/// darkens it toward the screen corner. Grows with the stream, gone when empty.
+enum AmbientShadeGeometry {
+    /// How far the shade reaches past the text, and the feather inside that reach.
+    static let reach: CGFloat = 72
+    /// The visible shape sits `inset` inside the reach and is blurred by
+    /// `feather`, so the fade is all but zero before the view's own edge.
+    static let inset: CGFloat = 46
+    static let feather: CGFloat = 20
+    /// Room the panel keeps around the stack so the shade is never cut.
+    static let margin: CGFloat = reach + 8
+}
+
+struct AmbientBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .darkAqua)
+        return view
+    }
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
+struct AmbientShade: View {
+    let strength: Double
+    let visible: Bool
+    let corner: Alignment
+    /// Snapshots cannot see the window server's blur; they draw the tint only.
+    var blur = true
+
+    var body: some View {
+        let toward: UnitPoint = corner == .topTrailing || corner == .bottomTrailing ? .trailing : .leading
+        let away: UnitPoint = toward == .trailing ? .leading : .trailing
+        ZStack {
+            if blur {
+                AmbientBlur().opacity(min(1, strength * 1.4))
+            }
+            LinearGradient(colors: [.black.opacity(0.45 * strength), .black.opacity(0.75 * strength)],
+                           startPoint: away, endPoint: toward)
+        }
+        .mask(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .padding(AmbientShadeGeometry.inset)
+                .blur(radius: AmbientShadeGeometry.feather))
+        .padding(-AmbientShadeGeometry.reach)
+        .opacity(visible && strength > 0 ? 1 : 0)
+        .animation(.easeOut(duration: 0.6), value: visible)
+        .allowsHitTesting(false)
+    }
+}
+
+/// A tight dark edge on every glyph and a wider soft one, the way subtitles
+/// stay readable over any picture. Applied to text only, never to a box.
+struct AmbientHalo: ViewModifier {
+    let strength: Double
+
+    func body(content: Content) -> some View {
+        if strength <= 0 {
+            content
+        } else {
+            content
+                .shadow(color: .black.opacity(0.55 * strength), radius: 0.5)
+        }
     }
 }
 
@@ -417,7 +495,7 @@ struct AmbientRow: View {
     var right = true
 
     private var accent: Color { Color(hex: line.look.accent) ?? .white }
-    private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.75) ?? .white.opacity(0.4) }
+    private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.75) ?? .white.opacity(0.5) }
 
     var body: some View {
         if settings.cards { card } else { plain }
@@ -446,6 +524,7 @@ struct AmbientRow: View {
             if settings.ages { AmbientAge(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize) }
         }
         .font(.system(size: settings.fontSize))
+        .modifier(AmbientHalo(strength: settings.backdrop ? 0 : settings.shade))
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -478,6 +557,7 @@ struct AmbientRow: View {
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
+        .modifier(AmbientHalo(strength: settings.backdrop ? 0 : settings.shade))
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -506,7 +586,7 @@ struct AmbientAge: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(AmbientTime.age(context.date.timeIntervalSince(since)))
                 .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
-                .foregroundColor(.white.opacity(0.3))
+                .foregroundColor(.white.opacity(0.45))
                 .lineLimit(1)
                 .frame(minWidth: max(18, fontSize * 1.8), alignment: .trailing)
         }
@@ -593,9 +673,9 @@ final class AmbientPanel: NSPanel {
         guard let screen = store.settings.screen < screens.count ? screens[store.settings.screen] : screens.first
         else { return }
         let frame = screen.visibleFrame
-        let width = min(store.settings.width + 24, frame.width)
-        let x = store.settings.corner.hasSuffix("left") ? frame.minX + 12 : frame.maxX - width - 12
-        panel.setFrame(NSRect(x: x, y: frame.minY + 6, width: width, height: max(0, frame.height - 12)), display: true)
+        let width = min(store.settings.width + 12 + AmbientShadeGeometry.margin, frame.width)
+        let x = store.settings.corner.hasSuffix("left") ? frame.minX : frame.maxX - width
+        panel.setFrame(NSRect(x: x, y: frame.minY, width: width, height: frame.height), display: true)
     }
 
     // MARK: middle click

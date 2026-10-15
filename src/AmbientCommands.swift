@@ -24,6 +24,7 @@ enum Ambient {
       --install              run at login and restart on crash (LaunchAgent)
       --uninstall            remove the LaunchAgent
       --selftest             check the parts that need no screen
+      --snapshot <png>       render the overlay over --on page|white|black|mixed|<image>
 
     pager ambient connect <url> --key <reader key> [--name N] [--sources a,b]
                              add a hub. Checks <url>/info, keeps the key in the Keychain
@@ -62,6 +63,7 @@ enum Ambient {
         case "--help", "-h", "help": print(usage); return 0
         case "--status": return AmbientCommands.status()
         case "--selftest": return AmbientSelfTest.run()
+        case "--snapshot": return AmbientSnapshot.run(Array(arguments.dropFirst()))
         case "--install": return AmbientCommands.install()
         case "--uninstall": return AmbientCommands.uninstall()
         case "--quit": return AmbientCommands.send(["op": "quit"], done: "stopped")

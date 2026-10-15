@@ -9,6 +9,9 @@ sticky until middle-clicked. Text first, with optional cards, icons, backdrop
 and, on macOS 15, effects. Menu bar item, a compact settings window and a
 searchable history window; `pager log --window` lists ambient events too.
 
+**Shade.** A feathered, frosted dark shade behind the stream and a thin halo on
+the text keep lines readable over light windows; one slider sets its strength.
+
 **`pager event`** puts a line on it from any script, over a local socket, with
 no server. With `--hub` it publishes to a hub instead.
 

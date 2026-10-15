@@ -396,6 +396,9 @@ struct AmbientSettings: Codable, Equatable {
     var cards = false
     var icons = false
     var backdrop = false
+    /// 0 to 1: the dark halo on the glyphs and the soft shade behind the stream,
+    /// so a line reads over a white page as well as over a dark one.
+    var shade = 0.6
     var details = false
     var ages = true
     var middleClick = true
@@ -404,7 +407,7 @@ struct AmbientSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case width, lifetime, lines, corner, screen, layout, effect, target, period
-        case cards, icons, backdrop, details, ages, sources, connections
+        case cards, icons, backdrop, shade, details, ages, sources, connections
         case rowGap = "row_gap", rowPadding = "row_padding", sidePadding = "side_padding"
         case columnGap = "column_gap", sourceWidth = "source_width", fontSize = "font_size"
         case maxLines = "max_lines", middleClick = "middle_click"
@@ -426,7 +429,7 @@ struct AmbientSettings: Codable, Equatable {
         corner = v(.corner, d.corner); screen = v(.screen, d.screen)
         layout = v(.layout, d.layout); effect = v(.effect, d.effect); target = v(.target, d.target)
         period = v(.period, d.period); cards = v(.cards, d.cards); icons = v(.icons, d.icons)
-        backdrop = v(.backdrop, d.backdrop); details = v(.details, d.details); ages = v(.ages, d.ages)
+        backdrop = v(.backdrop, d.backdrop); shade = v(.shade, d.shade); details = v(.details, d.details); ages = v(.ages, d.ages)
         middleClick = v(.middleClick, d.middleClick); sources = v(.sources, d.sources)
         connections = v(.connections, d.connections)
         sanitize()
@@ -449,6 +452,7 @@ struct AmbientSettings: Codable, Equatable {
         lifetime = clamp(lifetime, 1, Lifetime.maximum, 60)
         period = clamp(period, 0.5, 10, 2)
         maxLines = min(100, max(1, maxLines))
+        shade = clamp(shade, 0, 1, 0.6)
         lines = min(5, max(1, lines))
         screen = max(0, screen)
         if !AmbientSettings.corners.contains(corner) { corner = "top-right" }

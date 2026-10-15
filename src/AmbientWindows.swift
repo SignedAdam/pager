@@ -71,6 +71,9 @@ struct AmbientSettingsView: View {
             slider("Source width", $store.settings.sourceWidth, 40...160, step: 5)
             slider("Column gap", $store.settings.columnGap, 0...32)
             slider("Text size", $store.settings.fontSize, 10...17)
+            slider("Shade", Binding(get: { store.settings.shade * 100 }, set: { store.settings.shade = $0 / 100 }),
+                   0...100, step: 5, unit: "%")
+                .help("A dark halo on the text and a soft shade behind the stream, so lines read on light windows.")
             row("Lifetime") {
                 TextField("60", value: Binding(
                     get: { store.settings.lifetime },

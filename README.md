@@ -443,6 +443,8 @@ pager ambient --install     # run at login and come back after a crash (LaunchAg
 pager ambient --uninstall
 ```
 
+Lines carry a light dark halo, and the stream sits on a feathered shade of frosted dark glass that fades out before any edge, so they read on a white page as well as on a dark one. The Shade slider sets how strong it is, down to none. `pager ambient --snapshot out.png --on page` renders the overlay over a test background without touching the screen (tint only: the frosting needs the window server).
+
 Effects (`blink`, `flash`, `highlight`, `wave`, `gradient`) need macOS 15. On 13 and 14 the same lines show without them.
 
 ## Security
