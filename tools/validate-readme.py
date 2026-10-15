@@ -15,6 +15,10 @@ SOURCES = "".join(open(os.path.join(REPO, "src", f)).read()
                   for f in sorted(os.listdir(os.path.join(REPO, "src")))
                   if f.endswith(".swift") and not f.endswith("SelfTest.swift"))
 REAL_FLAGS = set(re.findall(r'"(--[a-z-]+)"', SOURCES))
+# The hub and its conformance suite are Python; their argparse flags count too.
+for name in ("hub/ambient-hub.py", "hub/conformance.py", "tools/mock-hub.py"):
+    if os.path.exists(os.path.join(REPO, name)):
+        REAL_FLAGS |= set(re.findall(r'"(--[a-z-]+)"', open(os.path.join(REPO, name)).read()))
 REAL_FLAGS |= {"--tour", "--examples", "--sounds", "--version", "--screen", "--help", "-v"}
 REAL_FLAGS |= set(re.findall(r'"(--[a-z-]+)"', open(f"{REPO}/install.sh").read()))  # installer flags
 REAL_FLAGS |= {"--install", "--uninstall", "--no-tour", "--release"}
