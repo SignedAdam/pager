@@ -93,4 +93,76 @@ enum AmbientSnapshot {
         print(out)
         return 0
     }
+
+    /// The other windows, drawn offscreen through a real NSHostingView so
+    /// native controls render too: `--snapshot-ui menu|history|settings|icon out.png`.
+    @MainActor
+    static func ui(_ arguments: [String]) -> Int32 {
+        guard arguments.count >= 2 else {
+            FileHandle.standardError.write(Data("usage: pager ambient --snapshot-ui menu|history|settings|icon out.png\n".utf8))
+            return 2
+        }
+        let which = arguments[0], out = arguments[1]
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        var settings = AmbientSettings.load()
+        settings.connections = [AmbientConnection(id: "albastar", name: "albastar", url: "https://citadel.albastov.com/v1/events")]
+        setenv("PAGER_AMBIENT_DIR", NSTemporaryDirectory() + "pager-snapshot-\(getpid())", 1)
+        defer { try? FileManager.default.removeItem(atPath: AmbientPaths.directory) }
+        let store = AmbientStore(settings: settings, state: AmbientState(), loadHistory: false)
+        store.phases = ["albastar": "connected"]
+        let now = Date()
+        for (index, sample) in AmbientDemo.events().prefix(18).enumerated() {
+            var event = sample
+            event.id = "snap_\(index)"
+            event.origin = "local"
+            event.receivedAt = now.addingTimeInterval(-Double(index * index) * 97 - 3)
+            if index == 4 { event.display = AmbientDisplay(lifetime: .sticky); event.url = "https://example.com" }
+            if index == 6 { event.dismissedAt = now }
+            store.history.insert(event, at: 0)
+        }
+        store.history.sort { ($0.receivedAt ?? now) > ($1.receivedAt ?? now) }
+        if arguments.contains("--paused") { store.pause(until: now.addingTimeInterval(3600)) }
+        let actions = AmbientMenuActions(pause: { _ in }, resume: {}, openLog: {}, openSettings: {},
+                                         allowMiddleClick: {}, quit: {})
+        let root: AnyView
+        var size = NSSize(width: 340, height: 520)
+        switch which {
+        case "menu": root = AnyView(AmbientMenuView(store: store, actions: actions, middleClickNeedsPermission: true))
+        case "history": root = AnyView(AmbientHistoryView(store: store)); size = NSSize(width: 720, height: 620)
+        case "settings": root = AnyView(AmbientSettingsView(store: store)); size = NSSize(width: 400, height: 720)
+        case "icon":
+            root = AnyView(HStack(spacing: 30) {
+                ForEach([false, true], id: \.self) { paused in
+                    Image(nsImage: AmbientIcon.image(paused: paused, size: 18)).renderingMode(.template)
+                        .resizable().interpolation(.none).frame(width: 144, height: 144)
+                }
+                VStack(spacing: 14) {
+                    Image(nsImage: AmbientIcon.image(size: 18)).renderingMode(.template).foregroundColor(.white)
+                    Image(nsImage: AmbientIcon.image(paused: true, size: 18)).renderingMode(.template).foregroundColor(.white)
+                }
+            }.padding(30).foregroundColor(.white).background(Color(white: 0.16)))
+            size = NSSize(width: 420, height: 210)
+        default: FileHandle.standardError.write(Data("unknown view \(which)\n".utf8)); return 2
+        }
+        let host = NSHostingView(rootView: root.environment(\.colorScheme, .dark))
+        host.appearance = NSAppearance(named: .darkAqua)
+        let fitting = host.fittingSize
+        if which == "menu", fitting.height > 10 { size.height = fitting.height }
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = AmbientTheme.nsInk
+        window.contentView = host
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return 1 }
+        try? png.write(to: URL(fileURLWithPath: out))
+        window.orderOut(nil)
+        print(out)
+        return 0
+    }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - ambient: the resident overlay
@@ -651,7 +652,7 @@ final class AmbientPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-@MainActor final class AmbientApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+@MainActor final class AmbientApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     enum Mode { case daemon, demo(count: Int, interval: TimeInterval) }
 
     let store: AmbientStore
@@ -664,6 +665,8 @@ final class AmbientPanel: NSPanel {
     private var monitors: [Any] = []
     private var signals: [DispatchSourceSignal] = []
     private var middleClickTap: CFMachPort?
+    private var popover: NSPopover?
+    private var pausedWatch: AnyCancellable?
     private var middleClickSwallowed = false
     private var trustPoll: Timer?
 
@@ -916,55 +919,45 @@ final class AmbientPanel: NSPanel {
 
     private func buildMenu() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "pager ambient")
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.autoenablesItems = false
-        item.menu = menu
+        item.button?.image = AmbientIcon.image(paused: store.paused)
+        item.button?.target = self
+        item.button?.action = #selector(togglePanel)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+        pausedWatch = store.$paused.sink { [weak self] paused in
+            self?.statusItem?.button?.image = AmbientIcon.image(paused: paused)
+        }
     }
 
-    /// Rebuilt each time it opens, so it always says what is true now.
-    func menuWillOpen(_ menu: NSMenu) {
-        menu.removeAllItems()
-        func add(_ title: String, _ action: Selector?, enabled: Bool = true) {
-            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            entry.target = self
-            entry.isEnabled = enabled && action != nil
-            menu.addItem(entry)
-        }
-        let clock = DateFormatter()
-        clock.dateFormat = Calendar.current.isDateInToday(store.pausedUntil ?? Date()) ? "HH:mm" : "EEE HH:mm"
-        if store.paused {
-            add(store.pausedUntil.map { "Paused until \(clock.string(from: $0))" } ?? "Paused", nil, enabled: false)
-            add("Resume", #selector(resume))
-        } else {
-            let phases = store.activeConnections.map { "\($0.name) \(store.phases[$0.id] ?? "idle")" }
-            add(phases.isEmpty ? "Local only" : phases.joined(separator: " \u{00B7} "), nil, enabled: false)
-        }
-        menu.addItem(.separator())
-        add("Pause 15 minutes", #selector(pause15))
-        add("Pause 1 hour", #selector(pause60))
-        add("Pause until tomorrow", #selector(pauseTomorrow))
-        menu.addItem(.separator())
-        add("Event log\u{2026}", #selector(showHistory))
-        add("Settings\u{2026}", #selector(showSettings))
-        if store.settings.middleClick && middleClickTap == nil {
-            add("Allow middle-click\u{2026}", #selector(askAccessibility))
-        }
-        menu.addItem(.separator())
-        add("Quit Ambient", #selector(quit))
+    /// The menu bar panel: state, recent events, pauses, the way to the log.
+    @objc private func togglePanel() {
+        if let popover, popover.isShown { popover.performClose(nil); return }
+        let actions = AmbientMenuActions(
+            pause: { [weak self] until in self?.store.pause(until: until); self?.popover?.performClose(nil) },
+            resume: { [weak self] in self?.store.resume(); self?.popover?.performClose(nil) },
+            openLog: { [weak self] in self?.popover?.performClose(nil); self?.showHistory() },
+            openSettings: { [weak self] in self?.popover?.performClose(nil); self?.showSettings() },
+            allowMiddleClick: { [weak self] in self?.popover?.performClose(nil); self?.askAccessibility() },
+            quit: { NSApp.terminate(nil) })
+        let view = AmbientMenuView(store: store, actions: actions,
+                                   middleClickNeedsPermission: store.settings.middleClick && middleClickTap == nil)
+        let controller = NSHostingController(rootView: view)
+        controller.sizingOptions = [.preferredContentSize]
+        let panel = NSPopover()
+        panel.behavior = .transient
+        panel.animates = true
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentViewController = controller
+        popover = panel
+        guard let button = statusItem?.button else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
-    @objc private func resume() { store.resume() }
-    @objc private func pause15() { store.pause(until: Date().addingTimeInterval(15 * 60)) }
-    @objc private func pause60() { store.pause(until: Date().addingTimeInterval(60 * 60)) }
-    @objc private func pauseTomorrow() { store.pause(until: AmbientRules.tomorrowMorning()) }
-    @objc private func quit() { NSApp.terminate(nil) }
 
     @objc func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = window(title: "Ambient settings", size: NSSize(width: 380, height: 560),
+            settingsWindow = window(title: "Ambient settings", size: NSSize(width: 400, height: 640),
                                     view: AmbientSettingsView(store: store))
         }
         bringForward(settingsWindow)
@@ -972,7 +965,7 @@ final class AmbientPanel: NSPanel {
 
     @objc func showHistory() {
         if historyWindow == nil {
-            historyWindow = window(title: "Ambient history", size: NSSize(width: 560, height: 620),
+            historyWindow = window(title: "Ambient event log", size: NSSize(width: 760, height: 620),
                                    view: AmbientHistoryView(store: store))
         }
         bringForward(historyWindow)
@@ -980,9 +973,14 @@ final class AmbientPanel: NSPanel {
 
     private func window<V: View>(title: String, size: NSSize, view: V) -> NSWindow {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = title
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = AmbientTheme.nsInk
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: view)
         window.center()

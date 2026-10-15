@@ -66,6 +66,7 @@ enum Ambient {
         case "--status": return AmbientCommands.status()
         case "--selftest": return AmbientSelfTest.run()
         case "--snapshot": return AmbientSnapshot.run(Array(arguments.dropFirst()))
+        case "--snapshot-ui": return AmbientSnapshot.ui(Array(arguments.dropFirst()))
         case "--install": return AmbientCommands.install()
         case "--uninstall": return AmbientCommands.uninstall()
         case "--quit": return AmbientCommands.send(["op": "quit"], done: "stopped")
