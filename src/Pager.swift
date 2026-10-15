@@ -1313,6 +1313,7 @@ final class LogWindow: NSObject, NSTableViewDelegate, NSTableViewDataSource {
     private var footer: NSTextField!
     private var search = ""
     private var level = 0                      // 0 all · 1 info · 2 warn · 3 error
+    private var kind = 0                       // 0 both · 1 panels · 2 ambient
     private var rows: [[String: String]] = []
     private var expanded = Set<String>()
     private var timer: Timer?
@@ -1498,6 +1499,15 @@ final class LogWindow: NSObject, NSTableViewDelegate, NSTableViewDataSource {
         levels.font = .systemFont(ofSize: 11)
         levels.selectedSegmentBezelColor = LogWindow.lime.withAlphaComponent(0.85)
 
+        // The ambient stream shares this history (src/AmbientModel.swift).
+        let kinds = NSSegmentedControl(labels: ["both", "panels", "ambient"],
+                                       trackingMode: .selectOne,
+                                       target: self, action: #selector(kindChanged(_:)))
+        kinds.selectedSegment = kind
+        kinds.segmentStyle = .rounded
+        kinds.controlSize = .small
+        kinds.font = .systemFont(ofSize: 11)
+
         let field = NSSearchField()
         field.placeholderString = "filter"
         field.font = .systemFont(ofSize: 11.5)
@@ -1518,7 +1528,7 @@ final class LogWindow: NSObject, NSTableViewDelegate, NSTableViewDataSource {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
 
-        let row = NSStackView(views: [left, spacer, levels, field])
+        let row = NSStackView(views: [left, spacer, kinds, levels, field])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
@@ -1592,7 +1602,9 @@ final class LogWindow: NSObject, NSTableViewDelegate, NSTableViewDataSource {
     }
 
     private func reload(keepScroll: Bool = false) {
-        let all = LogView.lines(20_000)
+        let panels = kind == 2 ? [] : LogView.lines(20_000)
+        let ambient = kind == 1 ? [] : AmbientHistory.logRows(limit: 5000)
+        let all = ambient.isEmpty ? panels : (panels + ambient).sorted { ($0["at"] ?? "") < ($1["at"] ?? "") }
         let filtered = withDays(all.filter(matches))
         guard !keepScroll || filtered.count != rows.count || rows.isEmpty else { return }
         let atBottom = keepScroll && isNearBottom()
@@ -1627,6 +1639,11 @@ final class LogWindow: NSObject, NSTableViewDelegate, NSTableViewDataSource {
 
     @objc private func levelChanged(_ sender: NSSegmentedControl) {
         level = sender.selectedSegment
+        reload()
+    }
+
+    @objc private func kindChanged(_ sender: NSSegmentedControl) {
+        kind = sender.selectedSegment
         reload()
     }
 
@@ -2667,6 +2684,15 @@ enum Main {
             exit(0)
         }
 
+        // The ambient stream lives in its own files (src/Ambient*.swift). These two
+        // words are the only way in, so a panel's flags can never reach it.
+        if CommandLine.arguments.dropFirst().first == "ambient" {
+            exit(Ambient.main(Array(CommandLine.arguments.dropFirst(2))))
+        }
+        if CommandLine.arguments.dropFirst().first == "event" {
+            exit(AmbientPublish.main(Array(CommandLine.arguments.dropFirst(2))))
+        }
+
         if CommandLine.arguments.dropFirst().first == "--tour" {
             let script = Paths.repo.appendingPathComponent("tour/tour.sh").path
             guard FileManager.default.isReadableFile(atPath: script) else {
@@ -2726,6 +2752,10 @@ enum Main {
               --sounds               play the bundled sounds in turn
               --examples             copy-pasteable recipes
               --version              print the version
+
+            pager ambient            the quiet stream: one-line events in a corner,
+                                     fading on their own. pager ambient --help
+            pager event --text "..." put a line on it, from any script
 
             pager log                what has been paging you, newest last
               --window               open it as a window instead
