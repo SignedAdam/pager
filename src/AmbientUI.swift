@@ -137,13 +137,13 @@ struct AmbientLevelTag: View {
     let severity: String?
 
     private var look: (text: String, color: Color, fill: Bool) {
-        switch Severity(rawValue: severity ?? "info") ?? .info {
-        case .debug: return ("DBG", AmbientTheme.faint, false)
-        case .info: return ("INF", AmbientTheme.faint, false)
-        case .notice: return ("NTC", AmbientTheme.dim, false)
-        case .warn: return ("WRN", AmbientTheme.amber, true)
-        case .error: return ("ERR", AmbientTheme.red, true)
-        case .critical: return ("CRT", AmbientTheme.red, true)
+        let level = Severity(rawValue: severity ?? "info") ?? .info
+        let text = level.rawValue.uppercased()
+        switch level {
+        case .debug, .info: return (text, AmbientTheme.faint, false)
+        case .notice: return (text, AmbientTheme.dim, false)
+        case .warn: return (text, AmbientTheme.amber, true)
+        case .error, .critical: return (text, AmbientTheme.red, true)
         }
     }
 
@@ -152,9 +152,9 @@ struct AmbientLevelTag: View {
         Text(l.text)
             .font(AmbientTheme.mono(9.5, .semibold))
             .foregroundColor(l.color)
-            .padding(.horizontal, 3)
+            .padding(.horizontal, 4)
             .background(RoundedRectangle(cornerRadius: 3).fill(l.fill ? l.color.opacity(0.18) : Color.white.opacity(0.05)))
-            .frame(width: 30, alignment: .leading)
+            .frame(width: 58, alignment: .leading)
     }
 }
 
@@ -282,7 +282,7 @@ struct AmbientMenuView: View {
                 permission.padding(.horizontal, 10).padding(.vertical, 5)
             }
         }
-        .frame(width: 400)
+        .frame(width: 440)
         .font(.system(size: 12))
         .background(AmbientTheme.ink)
         .environment(\.colorScheme, .dark)
@@ -324,7 +324,7 @@ struct AmbientMenuView: View {
             Text("Middle-click also reaches the app below").foregroundColor(AmbientTheme.dim)
             Spacer(minLength: 4)
             Button("Allow\u{2026}") { actions.allowMiddleClick() }
-                .buttonStyle(.plain).foregroundColor(AmbientTheme.lime)
+                .buttonStyle(.plain).foregroundColor(AmbientTheme.lime).fixedSize()
         }
     }
 }

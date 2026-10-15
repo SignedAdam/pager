@@ -622,7 +622,7 @@ struct AmbientHistoryRow: View {
                 }
             }
         }
-        .padding(.leading, 36 + 9 + 30 + 9)
+        .padding(.leading, 36 + 9 + 58 + 9)
         .padding(.bottom, 4)
     }
 }
