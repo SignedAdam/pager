@@ -2600,148 +2600,155 @@ let EXAMPLES = """
 
 """
 
-// Only as the first argument. Scanning every argument meant a --chip whose
-// value happened to be "--examples" printed the recipes instead of a panel.
-if CommandLine.arguments.dropFirst().first == "--sounds" {
-    // Ordered gentlest to loudest, not alphabetically, so an audition does
-    // not open with the alarm.
-    let roster = [
-        ("chirp", "two swept tones. the default voice for agents"),
-        ("tick",  "filtered noise, no pitch. something small and frequent"),
-        ("drop",  "a droplet, pitch rising. something was captured"),
-        ("thump", "sub sine, felt more than heard. barely interrupt"),
-        ("wood",  "a struck bar. a task finished"),
-        ("glass", "beating partials, shimmer tail. a summary, gentle"),
-        ("rise",  "three tones up a major triad. it worked"),
-        ("fall",  "two tones down a minor third. it did not"),
-        ("bell",  "FM, metallic and long. a decision is waiting"),
-        ("alarm", "three gated pulses. something is actually down"),
-    ]
-    print("\n  pager sounds. playing each in turn.\n")
-    for (name, meaning) in roster where Sound.names.contains(name) {
-        print("    " + name.padding(toLength: 8, withPad: " ", startingAt: 0) + meaning)
-        fflush(stdout)
-        if let url = Sound.url(name), let sound = NSSound(contentsOf: url, byReference: false) {
-            sound.play()
-            Thread.sleep(forTimeInterval: max(0.6, sound.duration) + 0.25)
-        }
-    }
-    print("\n  use one with:  pager --title \"…\" --sound bell")
-    print("  replace one by dropping your own at ~/.pager/sounds/<name>.wav\n")
-    exit(0)
-}
-
 let VERSION = "1.0.0"
 
-if ["--version", "-v"].contains(CommandLine.arguments.dropFirst().first ?? "") {
-    print("pager \(VERSION)")
-    exit(0)
-}
+// More than one source file means the entry point has to be named. Everything
+// below runs in the order it always did, top to bottom.
+@main
+enum Main {
+    static func main() {
+        // Only as the first argument. Scanning every argument meant a --chip whose
+        // value happened to be "--examples" printed the recipes instead of a panel.
+        if CommandLine.arguments.dropFirst().first == "--sounds" {
+            // Ordered gentlest to loudest, not alphabetically, so an audition does
+            // not open with the alarm.
+            let roster = [
+                ("chirp", "two swept tones. the default voice for agents"),
+                ("tick",  "filtered noise, no pitch. something small and frequent"),
+                ("drop",  "a droplet, pitch rising. something was captured"),
+                ("thump", "sub sine, felt more than heard. barely interrupt"),
+                ("wood",  "a struck bar. a task finished"),
+                ("glass", "beating partials, shimmer tail. a summary, gentle"),
+                ("rise",  "three tones up a major triad. it worked"),
+                ("fall",  "two tones down a minor third. it did not"),
+                ("bell",  "FM, metallic and long. a decision is waiting"),
+                ("alarm", "three gated pulses. something is actually down"),
+            ]
+            print("\n  pager sounds. playing each in turn.\n")
+            for (name, meaning) in roster where Sound.names.contains(name) {
+                print("    " + name.padding(toLength: 8, withPad: " ", startingAt: 0) + meaning)
+                fflush(stdout)
+                if let url = Sound.url(name), let sound = NSSound(contentsOf: url, byReference: false) {
+                    sound.play()
+                    Thread.sleep(forTimeInterval: max(0.6, sound.duration) + 0.25)
+                }
+            }
+            print("\n  use one with:  pager --title \"…\" --sound bell")
+            print("  replace one by dropping your own at ~/.pager/sounds/<name>.wav\n")
+            exit(0)
+        }
 
-// Geometry, so a script can work out where a panel will land.
-if CommandLine.arguments.dropFirst().first == "--screen" {
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    let main = NSScreen.main ?? NSScreen.screens[0]
-    let primary = NSScreen.screens.first ?? main
-    let v = main.visibleFrame, f = main.frame
-    print("visible \(Int(v.minX)) \(Int(v.minY)) \(Int(v.width)) \(Int(v.height))")
-    print("frame \(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height))")
-    print("primary \(Int(primary.frame.width)) \(Int(primary.frame.height))")
-    print("screens \(NSScreen.screens.count)")
-    for (index, screen) in NSScreen.screens.enumerated() {
-        let box = screen.visibleFrame
-        let here = screen == NSScreen.main ? "  (focused)" : ""
-        print("display \(index) \(Int(box.width))x\(Int(box.height)) at \(Int(box.minX)),\(Int(box.minY))\(here)")
+        if ["--version", "-v"].contains(CommandLine.arguments.dropFirst().first ?? "") {
+            print("pager \(VERSION)")
+            exit(0)
+        }
+
+        // Geometry, so a script can work out where a panel will land.
+        if CommandLine.arguments.dropFirst().first == "--screen" {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            let main = NSScreen.main ?? NSScreen.screens[0]
+            let primary = NSScreen.screens.first ?? main
+            let v = main.visibleFrame, f = main.frame
+            print("visible \(Int(v.minX)) \(Int(v.minY)) \(Int(v.width)) \(Int(v.height))")
+            print("frame \(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height))")
+            print("primary \(Int(primary.frame.width)) \(Int(primary.frame.height))")
+            print("screens \(NSScreen.screens.count)")
+            for (index, screen) in NSScreen.screens.enumerated() {
+                let box = screen.visibleFrame
+                let here = screen == NSScreen.main ? "  (focused)" : ""
+                print("display \(index) \(Int(box.width))x\(Int(box.height)) at \(Int(box.minX)),\(Int(box.minY))\(here)")
+            }
+            exit(0)
+        }
+
+        if ["log", "--log"].contains(CommandLine.arguments.dropFirst().first ?? "") {
+            LogView.show(Array(CommandLine.arguments.dropFirst(2)))
+            exit(0)
+        }
+
+        if CommandLine.arguments.dropFirst().first == "--tour" {
+            let script = Paths.repo.appendingPathComponent("tour/tour.sh").path
+            guard FileManager.default.isReadableFile(atPath: script) else {
+                FileHandle.standardError.write("no tour at \(script)\n".data(using: .utf8)!)
+                exit(1)
+            }
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = [script] + Array(CommandLine.arguments.dropFirst(2))
+            try? task.run()
+            task.waitUntilExit()
+            exit(task.terminationStatus)
+        }
+
+        if CommandLine.arguments.dropFirst().first == "--examples" {
+            print(EXAMPLES)
+            exit(0)
+        }
+
+        let options = Options.parse(CommandLine.arguments)
+        guard !options.title.isEmpty else {
+            FileHandle.standardError.write("""
+            usage: pager --title <text> [options]
+
+              --source <name>        who is talking, shown in the accent colour
+              --subtitle <text>      dim text beside the source
+              --body <text>          a paragraph under the title
+              --app <name>           what raised this, e.g. "Claude Code"
+              --icon <symbol|path>   SF Symbol name or an image file
+              --chip <text>          caption under the title, repeatable
+              --copy "Label:text"    a right click copy entry, repeatable
+              --sparkline "1,4,3,9"  a small line chart
+              --action "Label:cmd"   a button, repeatable. Its label goes to stdout.
+              --action-icon <n|path> decorate the action just declared
+              --action-fill "#hex"   its background
+              --action-text "#hex"   its label colour
+              --image <path>         a still or an animated GIF
+              --video <path>         inline video with controls
+              --audio "Name:path"    a player row with a waveform, repeatable
+              --choose "Label:cmd"   a button on every audio row, {} is the name
+              --width <points>       wider panel, worth it for lists
+              --accent "#rrggbb"     defaults to acid lime
+              --stack <mode>         vertical, cascade or none. default vertical
+              --gap <points>         space between stacked panels, default 12
+              --corner <name>        bottom-right (default), bottom-left,
+                                     top-right, top-left. Each stacks separately
+              --display <n>          which monitor. default follows your focus,
+                                     see `pager --screen` for the list
+              --offset "dx,dy"       nudge away from the corner
+              --loop                 repeat the video instead of stopping
+              --seconds <n>          time on screen, default 180
+              --sound <name|path>    a bundled sound, a .wav path, or none
+              --pinned               start pinned, no timer
+              --compact              start collapsed
+
+              --tour                 a guided tour of everything above
+              --sounds               play the bundled sounds in turn
+              --examples             copy-pasteable recipes
+              --version              print the version
+
+            pager log                what has been paging you, newest last
+              --window               open it as a window instead
+              --json                 one object per line, the way it was written
+                                     (also what you get when the output is piped)
+              -n <count>             how many lines, default 40
+              -f, --follow           keep printing as they arrive
+              --source / --app / --event / --caller / --level / --grep
+              --errors               only what went wrong
+              --stats                who calls pager, and how panels end
+              --path                 where the file is
+
+            Text supports **bold**, *italic* and `code`.
+
+            """.data(using: .utf8)!)
+            exit(1)
+        }
+
+        let app = NSApplication.shared
+        // .accessory keeps it out of the Dock and the app switcher, and stops it taking
+        // focus from whatever is in front.
+        app.setActivationPolicy(.accessory)
+        let pager = Pager(options: options)
+        withExtendedLifetime(pager) { app.run() }
     }
-    exit(0)
 }
-
-if ["log", "--log"].contains(CommandLine.arguments.dropFirst().first ?? "") {
-    LogView.show(Array(CommandLine.arguments.dropFirst(2)))
-    exit(0)
-}
-
-if CommandLine.arguments.dropFirst().first == "--tour" {
-    let script = Paths.repo.appendingPathComponent("tour/tour.sh").path
-    guard FileManager.default.isReadableFile(atPath: script) else {
-        FileHandle.standardError.write("no tour at \(script)\n".data(using: .utf8)!)
-        exit(1)
-    }
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/bin/bash")
-    task.arguments = [script] + Array(CommandLine.arguments.dropFirst(2))
-    try? task.run()
-    task.waitUntilExit()
-    exit(task.terminationStatus)
-}
-
-if CommandLine.arguments.dropFirst().first == "--examples" {
-    print(EXAMPLES)
-    exit(0)
-}
-
-let options = Options.parse(CommandLine.arguments)
-guard !options.title.isEmpty else {
-    FileHandle.standardError.write("""
-    usage: pager --title <text> [options]
-
-      --source <name>        who is talking, shown in the accent colour
-      --subtitle <text>      dim text beside the source
-      --body <text>          a paragraph under the title
-      --app <name>           what raised this, e.g. "Claude Code"
-      --icon <symbol|path>   SF Symbol name or an image file
-      --chip <text>          caption under the title, repeatable
-      --copy "Label:text"    a right click copy entry, repeatable
-      --sparkline "1,4,3,9"  a small line chart
-      --action "Label:cmd"   a button, repeatable. Its label goes to stdout.
-      --action-icon <n|path> decorate the action just declared
-      --action-fill "#hex"   its background
-      --action-text "#hex"   its label colour
-      --image <path>         a still or an animated GIF
-      --video <path>         inline video with controls
-      --audio "Name:path"    a player row with a waveform, repeatable
-      --choose "Label:cmd"   a button on every audio row, {} is the name
-      --width <points>       wider panel, worth it for lists
-      --accent "#rrggbb"     defaults to acid lime
-      --stack <mode>         vertical, cascade or none. default vertical
-      --gap <points>         space between stacked panels, default 12
-      --corner <name>        bottom-right (default), bottom-left,
-                             top-right, top-left. Each stacks separately
-      --display <n>          which monitor. default follows your focus,
-                             see `pager --screen` for the list
-      --offset "dx,dy"       nudge away from the corner
-      --loop                 repeat the video instead of stopping
-      --seconds <n>          time on screen, default 180
-      --sound <name|path>    a bundled sound, a .wav path, or none
-      --pinned               start pinned, no timer
-      --compact              start collapsed
-
-      --tour                 a guided tour of everything above
-      --sounds               play the bundled sounds in turn
-      --examples             copy-pasteable recipes
-      --version              print the version
-
-    pager log                what has been paging you, newest last
-      --window               open it as a window instead
-      --json                 one object per line, the way it was written
-                             (also what you get when the output is piped)
-      -n <count>             how many lines, default 40
-      -f, --follow           keep printing as they arrive
-      --source / --app / --event / --caller / --level / --grep
-      --errors               only what went wrong
-      --stats                who calls pager, and how panels end
-      --path                 where the file is
-
-    Text supports **bold**, *italic* and `code`.
-
-    """.data(using: .utf8)!)
-    exit(1)
-}
-
-let app = NSApplication.shared
-// .accessory keeps it out of the Dock and the app switcher, and stops it taking
-// focus from whatever is in front.
-app.setActivationPolicy(.accessory)
-let pager = Pager(options: options)
-app.run()

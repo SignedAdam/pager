@@ -5,7 +5,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${PAGER_BIN:-$HOME/.local/bin}"
 SKILLS="$HOME/.claude/skills"
 ACCENT=$'\033[38;5;190m'; DIM=$'\033[2m'; OFF=$'\033[0m'
-FRAMEWORKS=(-framework Cocoa -framework AVFoundation -framework AVKit)
+FRAMEWORKS=(-framework Cocoa -framework AVFoundation -framework AVKit -framework SwiftUI -framework Security)
+# Every file in src/ is one program; the @main in Pager.swift is the entry.
+SOURCES=("$REPO"/src/*.swift)
 
 if [ "${1:-}" = "--uninstall" ]; then
   rm -f "$BIN/pager"
@@ -21,8 +23,8 @@ fi
 if [ "${1:-}" = "--release" ]; then
   command -v swiftc >/dev/null || { echo "needs swiftc"; exit 1; }
   mkdir -p "$REPO/dist"
-  swiftc -O -target arm64-apple-macos13.0  -o /tmp/pager-arm64 "$REPO/src/Pager.swift" "${FRAMEWORKS[@]}"
-  swiftc -O -target x86_64-apple-macos13.0 -o /tmp/pager-x86   "$REPO/src/Pager.swift" "${FRAMEWORKS[@]}"
+  swiftc -O -parse-as-library -target arm64-apple-macos13.0  -o /tmp/pager-arm64 "${SOURCES[@]}" "${FRAMEWORKS[@]}"
+  swiftc -O -parse-as-library -target x86_64-apple-macos13.0 -o /tmp/pager-x86   "${SOURCES[@]}" "${FRAMEWORKS[@]}"
   lipo -create /tmp/pager-arm64 /tmp/pager-x86 -output "$REPO/dist/pager"
   codesign -s - --force "$REPO/dist/pager"
   rm -f /tmp/pager-arm64 /tmp/pager-x86
@@ -33,14 +35,14 @@ fi
 mkdir -p "$REPO/bin" "$BIN"
 
 if command -v swiftc >/dev/null 2>&1; then
-  swiftc -O -o "$REPO/bin/pager" "$REPO/src/Pager.swift" "${FRAMEWORKS[@]}"
+  swiftc -O -parse-as-library -target "$(uname -m)-apple-macos13.0" -o "$REPO/bin/pager" "${SOURCES[@]}" "${FRAMEWORKS[@]}"
   BUILT="compiled from source"
 elif [ -x "$REPO/dist/pager" ]; then
   # No compiler here, so use the universal binary that ships with the repo.
   # A clone is not quarantined, so it runs without a Gatekeeper prompt.
   cp "$REPO/dist/pager" "$REPO/bin/pager"
   BUILT="prebuilt universal binary (no swiftc found)"
-  if [ "$REPO/src/Pager.swift" -nt "$REPO/dist/pager" ]; then
+  if [ -n "$(find "$REPO/src" -name '*.swift' -newer "$REPO/dist/pager")" ]; then
     printf '  %swarning%s  dist/pager is older than the source it came from.\n' "$DIM" "$OFF"
   fi
 else

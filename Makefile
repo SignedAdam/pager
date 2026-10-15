@@ -3,10 +3,13 @@
 SHELL := /bin/bash
 
 VERSION    := $(shell grep -m1 '^let VERSION' src/Pager.swift | cut -d'"' -f2)
-SRC        := src/Pager.swift
+SRC        := $(wildcard src/*.swift)
 BIN        := bin/pager
 DIST       := dist/pager
-FRAMEWORKS := -framework Cocoa -framework AVFoundation -framework AVKit
+FRAMEWORKS := -framework Cocoa -framework AVFoundation -framework AVKit -framework SwiftUI -framework Security
+# Several files, so the entry point is the @main in Pager.swift. The target pins
+# availability checks to the macOS 13 floor rather than whatever this Mac runs.
+SWIFTFLAGS := -parse-as-library -target $(shell uname -m)-apple-macos13.0
 ACCENT     := \033[38;5;190m
 DIM        := \033[2m
 OFF        := \033[0m
@@ -26,7 +29,7 @@ build: $(BIN) ## compile bin/pager
 
 $(BIN): $(SRC)
 	@mkdir -p $(dir $@)
-	@swiftc -O -o $(BIN) $(SRC) $(FRAMEWORKS)
+	@swiftc -O $(SWIFTFLAGS) -o $(BIN) $(SRC) $(FRAMEWORKS)
 	@printf '  $(ACCENT)built$(OFF)  $(BIN)  $(DIM)%s$(OFF)\n' "$$(du -h $(BIN) | cut -f1)"
 
 install: ## build, link onto PATH, link the skill, start the tour
@@ -92,7 +95,7 @@ check: ## syntax check every script and the Swift source
 	@bash -n install.sh && printf '  install.sh  ok\n'
 	@bash -n tour/tour.sh && printf '  tour.sh     ok\n'
 	@for f in examples/*.sh; do bash -n $$f && printf '  %-11s ok\n' "$$(basename $$f)"; done
-	@swiftc -typecheck $(SRC) $(FRAMEWORKS) && printf '  Pager.swift ok\n'
+	@swiftc -typecheck $(SWIFTFLAGS) $(SRC) $(FRAMEWORKS) && printf '  Pager.swift ok\n'
 
 readme: ## check the README against the actual program
 	@python3 tools/validate-readme.py
@@ -135,5 +138,5 @@ shots: $(BIN) ## regenerate the screenshots in docs/
 
 watch: ## rebuild whenever the source changes
 	@command -v fswatch >/dev/null || { echo "brew install fswatch"; exit 1; }
-	@printf '  $(DIM)watching $(SRC)$(OFF)\n'
-	@fswatch -o $(SRC) | while read -r _; do $(MAKE) --no-print-directory build; done
+	@printf '  $(DIM)watching src/$(OFF)\n'
+	@fswatch -o src | while read -r _; do $(MAKE) --no-print-directory build; done

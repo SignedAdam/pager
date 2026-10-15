@@ -11,7 +11,9 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REAL_FLAGS = set(re.findall(r'"(--[a-z-]+)"', open(f"{REPO}/src/Pager.swift").read()))
+SOURCES = "".join(open(os.path.join(REPO, "src", f)).read()
+                  for f in sorted(os.listdir(os.path.join(REPO, "src"))) if f.endswith(".swift"))
+REAL_FLAGS = set(re.findall(r'"(--[a-z-]+)"', SOURCES))
 REAL_FLAGS |= {"--tour", "--examples", "--sounds", "--version", "--screen", "--help", "-v"}
 REAL_FLAGS |= set(re.findall(r'"(--[a-z-]+)"', open(f"{REPO}/install.sh").read()))  # installer flags
 REAL_FLAGS |= {"--install", "--uninstall", "--no-tour", "--release"}
