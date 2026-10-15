@@ -460,7 +460,7 @@ struct AmbientHistoryView: View {
                                 Spacer()
                                 Text("\(group.events.count)").font(AmbientTheme.mono(9.5)).foregroundColor(AmbientTheme.faint)
                             }
-                            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 6)
+                            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 3)
                             .background(AmbientTheme.ink.opacity(0.96))
                         }
                     }
@@ -541,17 +541,9 @@ struct AmbientHistoryRow: View {
         return url
     }
 
-    private var severityColor: Color {
-        switch Severity(rawValue: event.severity ?? "info") {
-        case .warn: return AmbientTheme.amber
-        case .error, .critical: return AmbientTheme.red
-        default: return .clear
-        }
-    }
-
     private func action(_ symbol: String, _ help: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            Image(systemName: symbol).font(.system(size: 10.5, weight: .medium)).frame(width: 22, height: 19)
+            Image(systemName: symbol).font(.system(size: 10, weight: .medium)).frame(width: 20, height: 16)
                 .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(AmbientTheme.raisedHover))
         }
         .buttonStyle(.plain).foregroundColor(AmbientTheme.text).help(help)
@@ -559,12 +551,11 @@ struct AmbientHistoryRow: View {
 
     var body: some View {
         let look = AmbientRules.resolve(event, store.settings)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Text(event.happened.map { Self.clock.string(from: $0) } ?? "")
                     .font(AmbientTheme.mono(10.5)).foregroundColor(AmbientTheme.faint).frame(width: 36, alignment: .leading)
-                RoundedRectangle(cornerRadius: 1).fill(severityColor).frame(width: 2, height: 12)
-                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+                AmbientLevelTag(severity: event.severity)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     if let brand = look.brand {
                         AmbientMark(brand: brand, color: Color(hex: look.sourceColor) ?? AmbientTheme.dim, size: 12)
@@ -576,6 +567,7 @@ struct AmbientHistoryRow: View {
                               color: Color(hex: look.accent) ?? AmbientTheme.text, fontSize: 12,
                               lineLimit: expanded ? 3 : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(event.dismissedAt == nil ? 1 : 0.45)
                 ZStack(alignment: .trailing) {
                     HStack(spacing: 6) {
                         if look.lifetime.isSticky && event.dismissedAt == nil {
@@ -600,9 +592,8 @@ struct AmbientHistoryRow: View {
             }
             if expanded { details(look) }
         }
-        .padding(.horizontal, 16).padding(.vertical, 6)
+        .padding(.horizontal, 16).padding(.vertical, expanded ? 3 : 0)
         .background(hover || expanded ? AmbientTheme.raised : Color.clear)
-        .opacity(event.dismissedAt == nil ? 1 : 0.5)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture(perform: toggle)
@@ -631,7 +622,7 @@ struct AmbientHistoryRow: View {
                 }
             }
         }
-        .padding(.leading, 36 + 10 + 2 + 10)
+        .padding(.leading, 36 + 9 + 30 + 9)
         .padding(.bottom, 4)
     }
 }

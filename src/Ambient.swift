@@ -647,6 +647,14 @@ struct AmbientAge: View {
 
 // MARK: - the app
 
+/// Takes the key status it needs for Esc and its menus, without activating
+/// the app or stealing focus from the window you were in.
+final class AmbientMenuPanel: NSPanel {
+    var onClose: () -> Void = {}
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { onClose() }
+}
+
 final class AmbientPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -665,7 +673,8 @@ final class AmbientPanel: NSPanel {
     private var monitors: [Any] = []
     private var signals: [DispatchSourceSignal] = []
     private var middleClickTap: CFMachPort?
-    private var popover: NSPopover?
+    private var menuPanel: AmbientMenuPanel?
+    private var panelMonitors: [Any] = []
     private var pausedWatch: AnyCancellable?
     private var middleClickSwallowed = false
     private var trustPoll: Timer?
@@ -787,9 +796,15 @@ final class AmbientPanel: NSPanel {
         return nil
     }
 
+    /// macOS shows its own prompt only once per app; after that the only way is
+    /// the Privacy pane. So: register (which adds `pager` to the list), then
+    /// open that pane at the right place, and pick the grant up as it lands.
     @objc private func askAccessibility() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         if AXIsProcessTrustedWithOptions(options) { _ = installMiddleClickTap(); return }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
         // The grant arrives while we run; pick it up without a restart.
         trustPoll?.invalidate()
         var tries = 0
@@ -929,29 +944,68 @@ final class AmbientPanel: NSPanel {
         }
     }
 
-    /// The menu bar panel: state, recent events, pauses, the way to the log.
+    /// The menu bar panel: a small dark sheet under the icon, square-ish like
+    /// a menu (not a popover bubble), closed by a click anywhere else or Esc.
     @objc private func togglePanel() {
-        if let popover, popover.isShown { popover.performClose(nil); return }
+        if menuPanel?.isVisible == true { closePanel(); return }
         let actions = AmbientMenuActions(
-            pause: { [weak self] until in self?.store.pause(until: until); self?.popover?.performClose(nil) },
-            resume: { [weak self] in self?.store.resume(); self?.popover?.performClose(nil) },
-            openLog: { [weak self] in self?.popover?.performClose(nil); self?.showHistory() },
-            openSettings: { [weak self] in self?.popover?.performClose(nil); self?.showSettings() },
-            allowMiddleClick: { [weak self] in self?.popover?.performClose(nil); self?.askAccessibility() },
+            pause: { [weak self] until in self?.store.pause(until: until); self?.closePanel() },
+            resume: { [weak self] in self?.store.resume(); self?.closePanel() },
+            openLog: { [weak self] in self?.closePanel(); self?.showHistory() },
+            openSettings: { [weak self] in self?.closePanel(); self?.showSettings() },
+            allowMiddleClick: { [weak self] in self?.closePanel(); self?.askAccessibility() },
             quit: { NSApp.terminate(nil) })
         let view = AmbientMenuView(store: store, actions: actions,
                                    middleClickNeedsPermission: store.settings.middleClick && middleClickTap == nil)
-        let controller = NSHostingController(rootView: view)
-        controller.sizingOptions = [.preferredContentSize]
-        let panel = NSPopover()
-        panel.behavior = .transient
-        panel.animates = true
+        let host = NSHostingView(rootView: view)
+        let size = host.fittingSize
+        let panel = AmbientMenuPanel(contentRect: NSRect(origin: .zero, size: size),
+                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
         panel.appearance = NSAppearance(named: .darkAqua)
-        panel.contentViewController = controller
-        popover = panel
-        guard let button = statusItem?.button else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        host.wantsLayer = true
+        host.layer?.cornerRadius = 7
+        host.layer?.cornerCurve = .continuous
+        host.layer?.masksToBounds = true
+        host.layer?.borderWidth = 1
+        host.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        panel.contentView = host
+        panel.onClose = { [weak self] in self?.closePanel() }
+        if let button = statusItem?.button, let window = button.window {
+            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            let x = min(max(screen.minX + 6, anchor.maxX - size.width), screen.maxX - size.width - 6)
+            panel.setFrameOrigin(NSPoint(x: x, y: anchor.minY - size.height - 5))
+        }
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        menuPanel = panel
+        statusItem?.button?.highlight(true)
+        let close: (NSEvent) -> Void = { [weak self] _ in Task { @MainActor in self?.closePanel() } }
+        if let outside = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: close) {
+            panelMonitors.append(outside)
+        }
+        // Clicks in our own other windows close it too; not the icon (that
+        // toggles) and not the Pause menu's own window.
+        if let inside = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
+            guard let self, let window = event.window else { return event }
+            let isMenu = String(describing: type(of: window)).contains("Menu") && !(window is AmbientMenuPanel)
+            if window !== self.menuPanel, window !== self.statusItem?.button?.window, !isMenu { self.closePanel() }
+            return event
+        }) {
+            panelMonitors.append(inside)
+        }
+    }
+
+    private func closePanel() {
+        menuPanel?.orderOut(nil)
+        menuPanel = nil
+        statusItem?.button?.highlight(false)
+        for monitor in panelMonitors { NSEvent.removeMonitor(monitor) }
+        panelMonitors = []
     }
 
 

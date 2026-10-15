@@ -132,33 +132,80 @@ struct AmbientStatusDot: View {
     }
 }
 
-/// One event as a compact row: mark, source, message, age.
+/// The level, as a log line shows it: a short tag, coloured only when it matters.
+struct AmbientLevelTag: View {
+    let severity: String?
+
+    private var look: (text: String, color: Color, fill: Bool) {
+        switch Severity(rawValue: severity ?? "info") ?? .info {
+        case .debug: return ("DBG", AmbientTheme.faint, false)
+        case .info: return ("INF", AmbientTheme.faint, false)
+        case .notice: return ("NTC", AmbientTheme.dim, false)
+        case .warn: return ("WRN", AmbientTheme.amber, true)
+        case .error: return ("ERR", AmbientTheme.red, true)
+        case .critical: return ("CRT", AmbientTheme.red, true)
+        }
+    }
+
+    var body: some View {
+        let l = look
+        Text(l.text)
+            .font(AmbientTheme.mono(9.5, .semibold))
+            .foregroundColor(l.color)
+            .padding(.horizontal, 3)
+            .background(RoundedRectangle(cornerRadius: 3).fill(l.fill ? l.color.opacity(0.18) : Color.white.opacity(0.05)))
+            .frame(width: 30, alignment: .leading)
+    }
+}
+
+/// A square icon button, all the same size, lit on hover.
+struct AmbientIconButton: View {
+    let symbol: String
+    let help: String
+    var tint: Color = AmbientTheme.dim
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium))
+                .foregroundColor(hover ? AmbientTheme.text : tint)
+                .frame(width: 26, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hover ? AmbientTheme.raisedHover : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hover = $0 }
+    }
+}
+
+/// One event as a log line: time, level, mark, source, message.
 struct AmbientEventRow: View {
     @ObservedObject var store: AmbientStore
     let event: AmbientEvent
     var sourceWidth: CGFloat = 84
-    var lineLimit = 1
-    var showContext = true
 
     var body: some View {
         let look = AmbientRules.resolve(event, store.settings)
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            if let at = event.happened {
+                AmbientAge(since: at, fontSize: 12).frame(width: 24, alignment: .leading)
+            }
+            AmbientLevelTag(severity: event.severity)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 if let brand = look.brand {
-                    AmbientMark(brand: brand, color: Color(hex: look.sourceColor) ?? AmbientTheme.dim, size: 11.5)
+                    AmbientMark(brand: brand, color: Color(hex: look.sourceColor) ?? AmbientTheme.dim, size: 11)
                 }
-                Text(store.label(for: event)).font(.system(size: 11.5))
-                    .foregroundColor(AmbientTheme.dim).lineLimit(1)
+                Text(store.label(for: event)).foregroundColor(AmbientTheme.dim).lineLimit(1)
             }
             .frame(width: sourceWidth, alignment: .leading)
-            StyledMessage(text: event.text, context: showContext ? (event.subject.map { $0 + "  " } ?? "") : "",
-                          color: Color(hex: look.accent) ?? AmbientTheme.text, fontSize: 11.5, lineLimit: lineLimit)
+            StyledMessage(text: event.text, color: Color(hex: look.accent) ?? AmbientTheme.text, fontSize: 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if let at = event.happened {
-                AmbientAge(since: at, fontSize: 12)
-            }
+                .opacity(event.dismissedAt == nil ? 1 : 0.45)
         }
-        .opacity(event.dismissedAt == nil ? 1 : 0.45)
+        .font(.system(size: 12))
     }
 }
 
@@ -173,6 +220,35 @@ struct AmbientMenuActions {
     var quit: () -> Void
 }
 
+/// A pause button that opens its choices as a native menu.
+struct AmbientPauseMenu: View {
+    let paused: Bool
+    let actions: AmbientMenuActions
+    @State private var hover = false
+
+    var body: some View {
+        if paused {
+            AmbientIconButton(symbol: "play.fill", help: "Resume", tint: AmbientTheme.lime) { actions.resume() }
+        } else {
+            Menu {
+                Button("For 15 minutes") { actions.pause(Date().addingTimeInterval(15 * 60)) }
+                Button("For 1 hour") { actions.pause(Date().addingTimeInterval(60 * 60)) }
+                Button("Until tomorrow, 9:00") { actions.pause(AmbientRules.tomorrowMorning()) }
+            } label: {
+                Image(systemName: "pause.fill")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .frame(width: 26, height: 22)
+            .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(hover ? AmbientTheme.raisedHover : Color.clear))
+            .onHover { hover = $0 }
+            .help("Pause")
+        }
+    }
+}
+
 struct AmbientMenuView: View {
     @ObservedObject var store: AmbientStore
     let actions: AmbientMenuActions
@@ -180,129 +256,75 @@ struct AmbientMenuView: View {
 
     private var connections: [AmbientConnection] { store.activeConnections }
 
-    private var status: (text: String, color: Color, glow: Bool) {
+    private var status: (text: String, color: Color) {
         if store.paused {
             if let until = store.pausedUntil {
                 let clock = DateFormatter()
                 clock.dateFormat = Calendar.current.isDateInToday(until) ? "HH:mm" : "EEE HH:mm"
-                return ("Paused until \(clock.string(from: until))", AmbientTheme.amber, false)
+                return ("paused until \(clock.string(from: until))", AmbientTheme.amber)
             }
-            return ("Paused", AmbientTheme.amber, false)
+            return ("paused", AmbientTheme.amber)
         }
-        if connections.isEmpty { return ("Local", AmbientTheme.dim, false) }
+        if connections.isEmpty { return ("local", AmbientTheme.dim) }
         let live = connections.filter { store.phases[$0.id] == "connected" }.count
-        if live == connections.count { return ("Live", AmbientTheme.lime, true) }
-        if live > 0 { return ("\(live) of \(connections.count) live", AmbientTheme.amber, true) }
-        return ("Reconnecting", AmbientTheme.amber, false)
+        if live == connections.count { return ("live", AmbientTheme.lime) }
+        if live > 0 { return ("\(live)/\(connections.count) live", AmbientTheme.amber) }
+        return ("reconnecting", AmbientTheme.amber)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header.padding(.horizontal, 14).padding(.top, 13).padding(.bottom, 11)
+            header.padding(.horizontal, 10).padding(.vertical, 5)
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
-            recent.padding(.horizontal, 14).padding(.vertical, 11)
-            Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
-            pause.padding(.horizontal, 14).padding(.vertical, 11)
-            Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
-            footer.padding(.horizontal, 14).padding(.vertical, 11)
+            recent.padding(.horizontal, 10).padding(.vertical, 5)
+            if middleClickNeedsPermission {
+                Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
+                permission.padding(.horizontal, 10).padding(.vertical, 5)
+            }
         }
-        .frame(width: 340)
+        .frame(width: 400)
+        .font(.system(size: 12))
         .background(AmbientTheme.ink)
         .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Image(nsImage: AmbientIcon.image(paused: store.paused, size: 16)).renderingMode(.template)
-                    .foregroundColor(AmbientTheme.text)
-                Text("Ambient").font(.system(size: 13, weight: .semibold)).foregroundColor(AmbientTheme.text)
-                Spacer()
-                HStack(spacing: 6) {
-                    AmbientStatusDot(color: status.color, glow: status.glow)
-                    Text(status.text).font(.system(size: 11, weight: .medium)).foregroundColor(status.color)
-                }
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(status.color.opacity(0.12)))
+        HStack(spacing: 7) {
+            Image(nsImage: AmbientIcon.image(paused: store.paused, size: 15)).renderingMode(.template)
+                .foregroundColor(AmbientTheme.text)
+            Text("Ambient").font(.system(size: 12, weight: .semibold)).foregroundColor(AmbientTheme.text)
+            HStack(spacing: 5) {
+                Circle().fill(status.color).frame(width: 5, height: 5)
+                Text(status.text).foregroundColor(status.color)
             }
-            ForEach(connections) { connection in
-                let phase = store.phases[connection.id] ?? "idle"
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 10))
-                        .foregroundColor(AmbientTheme.faint)
-                    Text(connection.name).font(.system(size: 11.5)).foregroundColor(AmbientTheme.dim)
-                    Text(URLComponents(string: connection.url)?.host ?? connection.url)
-                        .font(AmbientTheme.mono(10.5)).foregroundColor(AmbientTheme.faint).lineLimit(1)
-                    Spacer()
-                    if phase != "connected" {
-                        Text(phase).font(.system(size: 10.5)).foregroundColor(AmbientTheme.amber).lineLimit(1)
-                    }
-                }
-            }
+            .help(connections.map { "\($0.name): \(store.phases[$0.id] ?? "idle") \u{00B7} \($0.url)" }.joined(separator: "\n"))
+            Spacer(minLength: 4)
+            AmbientPauseMenu(paused: store.paused, actions: actions)
+            AmbientIconButton(symbol: "list.bullet.rectangle", help: "Event log") { actions.openLog() }
+            AmbientIconButton(symbol: "gearshape", help: "Settings") { actions.openSettings() }
+            AmbientIconButton(symbol: "power", help: "Quit Ambient") { actions.quit() }
         }
     }
 
     private var recent: some View {
-        let events = Array(store.history.prefix(5))
-        return VStack(alignment: .leading, spacing: 7) {
-            AmbientSectionTitle(text: "Recent", trailing: store.history.isEmpty ? nil : "\(store.history.count) in log")
+        let events = Array(store.history.prefix(8))
+        return VStack(alignment: .leading, spacing: 1) {
             if events.isEmpty {
-                Text("Nothing yet. Lines arrive from your hubs and `pager event`.")
-                    .font(.system(size: 11.5)).foregroundColor(AmbientTheme.faint)
+                Text("Nothing yet").foregroundColor(AmbientTheme.faint).padding(.vertical, 4)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(events, id: \.key) { event in
-                    AmbientEventRow(store: store, event: event, sourceWidth: 74, lineLimit: 2, showContext: false)
-                }
+            ForEach(events, id: \.key) { event in
+                AmbientEventRow(store: store, event: event, sourceWidth: 80)
             }
         }
     }
 
-    private var pause: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle(text: "Quiet for")
-            HStack(spacing: 6) {
-                Button("15 min") { actions.pause(Date().addingTimeInterval(15 * 60)) }
-                Button("1 hour") { actions.pause(Date().addingTimeInterval(60 * 60)) }
-                Button("Until 9:00") { actions.pause(AmbientRules.tomorrowMorning()) }
-                    .help("Quiet until 9:00 tomorrow")
-            }
-            .lineLimit(1)
-            .buttonStyle(AmbientButtonStyle())
-            if store.paused {
-                Button { actions.resume() } label: {
-                    Label("Resume the stream", systemImage: "play.fill")
-                }
-                .buttonStyle(AmbientButtonStyle(prominent: true))
-            }
-        }
-    }
-
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if middleClickNeedsPermission {
-                HStack(alignment: .center, spacing: 9) {
-                    Image(systemName: "computermouse").font(.system(size: 12)).foregroundColor(AmbientTheme.amber)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Middle-click also hits the app below").font(.system(size: 11.5, weight: .medium))
-                            .foregroundColor(AmbientTheme.text)
-                        Text("Allow Accessibility to fix it").font(.system(size: 11))
-                            .foregroundColor(AmbientTheme.dim)
-                    }
-                    Spacer(minLength: 4)
-                    Button("Allow") { actions.allowMiddleClick() }.buttonStyle(AmbientButtonStyle(compact: true))
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(AmbientTheme.amber.opacity(0.08)))
-                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(AmbientTheme.amber.opacity(0.18)))
-            }
-            HStack(spacing: 6) {
-                Button { actions.openLog() } label: { Label("Event log", systemImage: "list.bullet.rectangle") }
-                Button { actions.openSettings() } label: { Label("Settings", systemImage: "slider.horizontal.3") }
-                Button { actions.quit() } label: { Image(systemName: "power") }
-                    .buttonStyle(AmbientButtonStyle(compact: true)).help("Quit Ambient")
-            }
-            .buttonStyle(AmbientButtonStyle())
+    private var permission: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "computermouse").foregroundColor(AmbientTheme.amber)
+            Text("Middle-click also reaches the app below").foregroundColor(AmbientTheme.dim)
+            Spacer(minLength: 4)
+            Button("Allow\u{2026}") { actions.allowMiddleClick() }
+                .buttonStyle(.plain).foregroundColor(AmbientTheme.lime)
         }
     }
 }
