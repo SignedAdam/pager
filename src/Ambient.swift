@@ -219,7 +219,13 @@ struct AmbientLine: Identifiable, Equatable {
     /// A hub's list of open stickies, on start and after every reconnect.
     func restoreStickies(connection: String, _ open: [AmbientEvent]) {
         let keys = Set(open.map(\.key))
-        for event in open { ingest(event) }
+        for event in open {
+            // Dismissed here while the hub was out of reach: tell it now.
+            if history.first(where: { $0.key == event.key })?.dismissedAt != nil {
+                hubs[connection]?.setDismissed(event.id, true)
+            }
+            ingest(event)
+        }
         let gone = lines.filter {
             $0.event.connection == connection && $0.event.fromHub && $0.look.lifetime.isSticky && !keys.contains($0.id)
         }

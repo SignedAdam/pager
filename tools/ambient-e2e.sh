@@ -66,6 +66,12 @@ while True:
 print(data.decode())
 PY
 }
+dismiss_key() { python3 - "$1" <<'PY'
+import json, socket, sys, os
+s = socket.socket(socket.AF_UNIX); s.connect(os.environ["PAGER_AMBIENT_DIR"] + "/ambient.sock")
+s.sendall(json.dumps({"op": "dismiss", "key": sys.argv[1]}).encode() + b"\n"); s.shutdown(socket.SHUT_WR); s.recv(999)
+PY
+}
 visible() { status_json | json "' '.join(d['visible_ids'])"; }
 cursor() { status_json | json "d['connections'][0]['cursor']"; }
 saved_cursor() { json "d['cursors'].get('default','')" < "$PAGER_AMBIENT_DIR/ambient-state.json" 2>/dev/null; }
@@ -117,11 +123,7 @@ check "pager event --hub with a reader key fails clearly" "[ $code != 0 ] && gre
 s1=$(publish '{"type":"down","severity":"error","text":"site **down**","display":{"lifetime":"sticky"}}')
 si=$(json "d['id']" <<<"$s1")
 check "sticky shows" "wait_for 3 \"visible | grep -q 'default/$si'\""
-python3 - "$si" <<'PY'
-import json, socket, sys, os
-s = socket.socket(socket.AF_UNIX); s.connect(os.environ["PAGER_AMBIENT_DIR"] + "/ambient.sock")
-s.sendall(json.dumps({"op": "dismiss", "key": "default/" + sys.argv[1]}).encode() + b"\n"); s.shutdown(socket.SHUT_WR); s.recv(999)
-PY
+dismiss_key "default/$si"
 check "dismiss from the overlay reaches the hub" "wait_for 3 \"grep -q 'dismiss $si by tester' '$HUBLOG'\""
 check "hub no longer lists it as open" "! curl -s -H 'Authorization: Bearer read-test' '$BASE?sticky=open' | grep -q $si"
 check "line gone" "! visible | grep -q $si"
@@ -138,14 +140,19 @@ curl -s -X POST -H 'Authorization: Bearer read-narrow' "$BASE/$s2i/dismiss" -o /
 check "another reader's dismiss does not touch ours (and is 404 outside its grant)" "sleep 0.5; visible | grep -q $s2i"
 
 # ------------------------------------------------------------------- resume
+s3=$(publish '{"type":"down","text":"dismissed **offline**","display":{"lifetime":"sticky"}}' | json "d['id']")
+wait_for 3 "visible | grep -q $s3"
 before=$(cursor)
 stop_hub
 check "notices the hub is gone" "wait_for 5 \"grep -q 'hub default: stream ended\\|hub default: network' '$LOG'\""
+dismiss_key "default/$s3"
+check "dismiss while offline is noted" "wait_for 3 \"grep -q 'dismiss $s3 -> offline' '$LOG'\""
 start_hub
+check "and reaches the hub after reconnecting" "wait_for 15 \"grep -q 'dismiss $s3 by tester' '$HUBLOG'\""
 r1=$(publish '{"type":"push","text":"pushed while **away** 1","display":{"lifetime":3}}')
 r2=$(publish '{"type":"push","text":"pushed while **away** 2","display":{"lifetime":3}}')
 rc=$(json "d['cursor']" <<<"$r2")
-check "reconnects with Last-Event-ID" "wait_for 15 \"grep -q 'last-event-id=$before replay=2' '$HUBLOG'\"" "$(grep 'stream open' "$HUBLOG" | tail -2)"
+check "reconnects with Last-Event-ID" "wait_for 15 \"grep -q 'last-event-id=$before replay=' '$HUBLOG'\"" "$(grep 'stream open' "$HUBLOG" | tail -2)"
 check "both missed events caught up" "wait_for 3 '[ \"\$(cursor)\" = \"$rc\" ]'"
 
 # ----------------------------------------------------------------- restart
