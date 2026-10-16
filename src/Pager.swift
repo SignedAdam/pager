@@ -2463,6 +2463,7 @@ final class Pager: NSObject, NSWindowDelegate, NSMenuDelegate {
         timer?.invalidate()
         let left = deadline.timeIntervalSinceNow
         guard left > 0 else { close("expired"); return }
+        guard progressWidth != nil else { return }
         setBar(left: left, animated: false)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = left
@@ -2485,6 +2486,9 @@ final class Pager: NSObject, NSWindowDelegate, NSMenuDelegate {
     }
 
     private func setBar(left: TimeInterval, animated: Bool) {
+        // A video starts playing while the panel is still being built, before
+        // the bar exists; there is nothing to move yet.
+        guard progressWidth != nil else { return }
         let target = width * CGFloat(min(1, max(0, left / options.seconds)))
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated ? 0.2 : 0
@@ -2643,7 +2647,7 @@ let EXAMPLES = """
 
 """
 
-let VERSION = "1.1.0"
+let VERSION = "1.1.1"
 
 // More than one source file means the entry point has to be named. Everything
 // below runs in the order it always did, top to bottom.

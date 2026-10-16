@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+A panel with a video crashed as it opened: the video started playing while the
+panel was still being built, and holding the countdown reached for a bar that
+did not exist yet. 1.1.0 only.
+
 ## 1.1.0
 
 **Hub panels.** A hub event with `data.panel` also raises a full panel on the
