@@ -101,6 +101,39 @@ enum AmbientSelfTest {
         hub.origin = "hub"; hub.connection = "work"
         expect(hub.key == "work/evt_1" && local.key == "local/evt_1", "keys are per connection")
         expect(AmbientEvent.localID().hasPrefix("loc_"), "local ids")
+        panels()
+    }
+
+    private static func panels() {
+        func decode(_ data: String) -> AmbientEvent? {
+            AmbientEvent.decode(Data((#"{"id":"p","source":"narkis-app","text":"**Payment failed** · Pro","severity":"error","#
+                                      + #""subject":"api","url":"https://x.test/a'b","data":"# + data + "}").utf8))
+        }
+        expect(decode("null")?.panel == nil && decode(#"{"x":1}"#)?.panel == nil, "no data.panel, no panel")
+        expect(decode(#"{"panel":false}"#)?.panel == nil, "panel false is no panel")
+        expect(decode(#"{"panel":true}"#)?.panel == AmbientPanelRequest(), "panel true")
+        let custom = decode(#"{"panel":{"title":" Card declined ","pinned":false,"seconds":2,"sound":"/etc/x"}}"#)
+        expect(custom?.panel?.title == "Card declined" && custom?.panel?.seconds == 2, "panel object decoded")
+        expect(decode(#"{"panel":"yes"}"#)?.panel == nil && decode(#"{"panel":"yes"}"#) != nil, "odd panel value ignored, event kept")
+        guard let event = decode(#"{"panel":true}"#), let custom, let request = custom.panel else { return }
+        let args = AmbientPanelRequest.arguments(event, AmbientPanelRequest(), label: "Narkis")
+        func value(_ a: [String], _ flag: String) -> String? { a.firstIndex(of: flag).map { a[$0 + 1] } }
+        expect(value(args, "--title") == "Payment failed · Pro", "panel title is the plain text")
+        expect(value(args, "--sound") == "alarm" && args.contains("--pinned") && value(args, "--accent") == "#ff5f57",
+               "error panels alarm, red, pinned")
+        expect(value(args, "--chip") == "api" && value(args, "--source") == "Narkis", "chip and source")
+        expect(value(args, "--action") == #"Open:open 'https://x.test/a'\''b'"#, "url action is quoted")
+        let mild = AmbientPanelRequest.arguments(custom, request, label: "Narkis")
+        expect(value(mild, "--title") == "Card declined" && value(mild, "--body") == "**Payment failed** · Pro",
+               "custom title keeps the text as body")
+        expect(value(mild, "--sound") == "alarm" && value(mild, "--seconds") == "5" && !mild.contains("--pinned"),
+               "unknown sound falls back, seconds clamped, pinned false honoured")
+        var info = event
+        info.severity = "info"; info.url = "http://plain.test"
+        let infoArgs = AmbientPanelRequest.arguments(info, AmbientPanelRequest(), label: "Narkis")
+        expect(value(infoArgs, "--sound") == "rise" && value(infoArgs, "--seconds") == "300" && !infoArgs.contains("--action"),
+               "info panels rise, five minutes, http links dropped")
+        expect(AmbientSettings().panels, "hub panels on by default")
     }
 
     private static func rules() {

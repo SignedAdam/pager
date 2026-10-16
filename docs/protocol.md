@@ -148,3 +148,11 @@ through. Set three things when you create one:
 One source per service a person would recognise. Events about the same thing from two services (a sale seen by
 Stripe and by your app) belong to whichever one the reader should think of first; never publish both.
 
+## Reader conventions in `data`
+
+`data` is opaque to hubs. Readers may give some of it meaning; publishers that do not know a reader ignore this.
+
+- `data.panel` (Pager): `true`, or an object with any of `title` (string), `body` (string), `pinned` (bool),
+  `seconds` (number, 5..86400) and `sound` (a bundled sound name). The reader also raises a full Pager panel for the
+  event, once per event, rate-limited on the reader. Anything else in `panel` is ignored.
+

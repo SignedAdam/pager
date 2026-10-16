@@ -223,6 +223,8 @@ struct AmbientSettingsView: View {
                 AmbientPill(title: "Source icons", isOn: $store.settings.sourceIcons)
                 AmbientPill(title: "Ages", isOn: $store.settings.ages)
                 AmbientPill(title: "Middle-click closes", isOn: $store.settings.middleClick)
+                AmbientPill(title: "Hub panels", isOn: $store.settings.panels)
+                    .help("Events that ask for a panel (data.panel) also raise one")
             }
             HStack(spacing: 6) {
                 AmbientPill(title: "Type icons", isOn: $store.settings.icons)

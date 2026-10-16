@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Hub panels.** A hub event with `data.panel` also raises a full panel on the
+reader, once per event and at most three a minute (the rest fold into one),
+so a server can reach the panel surface without a shell on the Mac.
+
 **Ambient stream.** `pager ambient` keeps a quiet, click-through stream of
 one-line events in a corner of the screen: source on the left, message on the
 right, a live age (`now`, `12s`, `4m`), gone after 60 seconds by default or

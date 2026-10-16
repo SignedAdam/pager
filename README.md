@@ -430,6 +430,8 @@ pager event --hub https://hub.example.com/v1/events --key "$PAGER_AMBIENT_PUBLIS
 
 Events from a hub are data. They are shown, filtered and stored, and nothing in them is ever run. A link opens only when you click it in the history window.
 
+An event that needs you can also open a full panel: publish it with `"data": {"panel": true}`, or `"panel": {"title", "body", "pinned", "seconds", "sound"}` to shape it. It still lands in the stream and the history. Severity picks the defaults (error and critical alarm in red and stay up, warn rings and stays up, anything milder leaves after five minutes), the event's `https` link becomes an Open button, and only bundled sounds play. Each event opens its panel once, including events that arrive in the catch-up after sleep; more than three a minute are held back into one panel that says how many. Turn it off with Hub panels in settings, or mute the source.
+
 To run your own hub, use the reference one in [`hub/`](hub/README.md): one Python file on SQLite, no dependencies, with a Dockerfile. You add sources, hand each publisher a key bound to its source, and hand each person a reader key granted only the sources they may see, so a company can share some streams and keep others. If you build a hub on your own stack instead, `python3 hub/conformance.py <base url> --publish-key … --reader-key …` tells you whether it speaks the protocol.
 
 Sources get their mark and colour: a source named `github`, `github-acme` or "GitHub" shows the GitHub mark, `stripe` the Stripe one, and so on for about thirty services (Simple Icons, in `assets/brands`). Anything else gets a monogram. Put your own `<slug>.svg` or `.png` in `~/.pager/brands`, or set `icon` per source in `ambient.json`.
@@ -451,7 +453,7 @@ Effects (`blink`, `flash`, `highlight`, `wave`, `gradient`) need macOS 15. On 13
 
 ## Security
 
-Commands supplied through `--action` and `--choose` are passed to `/bin/sh -c`. The ambient stream has no equivalent: nothing in an event can run a command. Treat them exactly like shell code. Never interpolate filenames, messages, branch names, clipboard contents, model output, or any other untrusted text into an action command. Pass fixed commands or validate and quote every value before constructing the option.
+Commands supplied through `--action` and `--choose` are passed to `/bin/sh -c`. The ambient stream has no equivalent: nothing in an event can run a command. Treat them exactly like shell code. Never interpolate filenames, messages, branch names, clipboard contents, model output, or any other untrusted text into an action command. Pass fixed commands or validate and quote every value before constructing the option. The one button a hub panel gets is Open, which Pager builds itself as `open '<https url>'`, quoted.
 
 ## Build and contribute
 

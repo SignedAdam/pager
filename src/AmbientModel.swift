@@ -222,9 +222,12 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
     /// or `demo`; `connection` is the id of the connection it came through.
     var origin: String?
     var connection: String?
+    /// `data.panel` from a hub: also raise a full pager panel for this one.
+    /// Read on arrival only, never written to history.
+    var panel: AmbientPanelRequest?
 
     enum CodingKeys: String, CodingKey {
-        case id, cursor, source, type, severity, text, detail, subject, url, display, origin, connection
+        case id, cursor, source, type, severity, text, detail, subject, url, display, origin, connection, data
         case sourceName = "source_name", sourceColor = "source_color", sourceIcon = "source_icon"
         case occurredAt = "occurred_at", receivedAt = "received_at", dismissedAt = "dismissed_at"
     }
@@ -264,6 +267,9 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
         dismissedAt = date(.dismissedAt)
         origin = string(.origin)
         connection = string(.connection)
+        if let data = try? c.nestedContainer(keyedBy: AmbientPanelRequest.DataKeys.self, forKey: .data) {
+            panel = AmbientPanelRequest.decode(data)
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -309,6 +315,68 @@ struct AmbientEvent: Codable, Equatable, Identifiable {
         let alphabet = Array("0123456789abcdefghijklmnopqrstuvwxyz")
         let tail = String((0..<5).map { _ in alphabet[Int.random(in: 0..<alphabet.count)] })
         return "loc_" + String(millis, radix: 36) + tail
+    }
+}
+
+// MARK: - panels raised by hub events
+
+/// What a publisher asked for in `data.panel`: `true` for the defaults, or an
+/// object with any of `title`, `body`, `pinned`, `seconds`, `sound`. All of it
+/// is display data; nothing from a hub is ever run.
+struct AmbientPanelRequest: Equatable {
+    var title: String?
+    var body: String?
+    var pinned: Bool?
+    var seconds: Double?
+    var sound: String?
+
+    enum DataKeys: String, CodingKey { case panel }
+    enum Keys: String, CodingKey { case title, body, pinned, seconds, sound }
+
+    static func decode(_ data: KeyedDecodingContainer<DataKeys>) -> AmbientPanelRequest? {
+        if let flag = try? data.decodeIfPresent(Bool.self, forKey: .panel) { return flag ? AmbientPanelRequest() : nil }
+        guard let c = try? data.nestedContainer(keyedBy: Keys.self, forKey: .panel) else { return nil }
+        func text(_ key: Keys) -> String? {
+            ((try? c.decodeIfPresent(String.self, forKey: key)) ?? nil)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return AmbientPanelRequest(title: text(.title), body: text(.body),
+                                   pinned: (try? c.decodeIfPresent(Bool.self, forKey: .pinned)) ?? nil,
+                                   seconds: (try? c.decodeIfPresent(Double.self, forKey: .seconds)) ?? nil,
+                                   sound: text(.sound))
+    }
+
+    /// Bundled sounds only: a hub does not get to name files on this Mac.
+    static let sounds: Set<String> = ["alarm", "bell", "chirp", "drop", "fall", "glass", "rise", "thump", "tick", "wood", "none"]
+
+    /// The `pager` arguments for this event's panel. Severity picks the
+    /// defaults: error and critical alarm in red, warn rings orange, both stay
+    /// until closed; anything milder rises and leaves after five minutes.
+    static func arguments(_ event: AmbientEvent, _ request: AmbientPanelRequest, label: String) -> [String] {
+        func clip(_ text: String, _ limit: Int) -> String { text.count > limit ? String(text.prefix(limit - 1)) + "…" : text }
+        let severity = Severity(rawValue: event.severity ?? "") ?? .info
+        let bad = severity.rank >= Severity.error.rank, warn = severity == .warn
+        let title = request.title.flatMap { $0.isEmpty ? nil : $0 } ?? AmbientHistory.plain(event.text)
+        var args = ["--title", clip(title, 140), "--source", clip(label, 48)]
+        if let body = request.body.flatMap({ $0.isEmpty ? nil : $0 }) ?? event.detail, !body.isEmpty {
+            args += ["--body", clip(body, 800)]
+        } else if request.title != nil {
+            args += ["--body", clip(event.text, 300)]
+        }
+        if let subject = event.subject, !subject.isEmpty { args += ["--chip", clip(subject, 40)] }
+        if let accent = AmbientRules.accent(for: event) ?? (bad ? "#ff5f57" : nil) { args += ["--accent", accent] }
+        let sound = request.sound.map { $0.lowercased() }.flatMap { sounds.contains($0) ? $0 : nil }
+        args += ["--sound", sound ?? (bad ? "alarm" : warn ? "bell" : "rise")]
+        if request.pinned ?? (bad || warn) {
+            args.append("--pinned")
+        } else {
+            let seconds = request.seconds.map { $0.isFinite ? min(86_400, max(5, $0)) : 300 } ?? 300
+            args += ["--seconds", String(Int(seconds))]
+        }
+        if let link = event.url, let url = URL(string: link), url.scheme?.lowercased() == "https", url.host != nil {
+            let quoted = "'" + url.absoluteString.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            args += ["--action", "Open:open " + quoted]
+        }
+        return args
     }
 }
 
@@ -411,12 +479,14 @@ struct AmbientSettings: Codable, Equatable {
     var details = false
     var ages = true
     var middleClick = true
+    /// Hub events that carry `data.panel` also raise a pager panel.
+    var panels = true
     var sources: [String: SourceOverride] = [:]
     var connections: [AmbientConnection] = []
 
     enum CodingKeys: String, CodingKey {
         case width, lifetime, lines, corner, screen, layout, effect, target, period
-        case cards, icons, backdrop, shade, details, ages, sources, connections
+        case cards, icons, backdrop, shade, details, ages, sources, connections, panels
         case rowGap = "row_gap", rowPadding = "row_padding", sidePadding = "side_padding"
         case columnGap = "column_gap", sourceWidth = "source_width", fontSize = "font_size"
         case maxLines = "max_lines", middleClick = "middle_click", sourceIcons = "source_icons"
@@ -439,7 +509,7 @@ struct AmbientSettings: Codable, Equatable {
         layout = v(.layout, d.layout); effect = v(.effect, d.effect); target = v(.target, d.target)
         period = v(.period, d.period); cards = v(.cards, d.cards); icons = v(.icons, d.icons)
         backdrop = v(.backdrop, d.backdrop); shade = v(.shade, d.shade); sourceIcons = v(.sourceIcons, d.sourceIcons); details = v(.details, d.details); ages = v(.ages, d.ages)
-        middleClick = v(.middleClick, d.middleClick); sources = v(.sources, d.sources)
+        middleClick = v(.middleClick, d.middleClick); panels = v(.panels, d.panels); sources = v(.sources, d.sources)
         connections = v(.connections, d.connections)
         sanitize()
     }

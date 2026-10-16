@@ -110,6 +110,8 @@ struct AmbientLine: Identifiable, Equatable {
                 state.lastEventSource = label(for: event)
             }
             AmbientLog.write("event \(event.key) source \(event.source)" + (event.cursor.map { " cursor \($0)" } ?? ""))
+            // First sight only, so a replay or a restart never raises it twice.
+            if event.fromHub, let request = event.panel { raisePanel(event, request) }
         }
         scheduleStateSave()
         present(event)
@@ -144,6 +146,62 @@ struct AmbientLine: Identifiable, Equatable {
         if look.lifetime.isSticky, event.origin == "local", !state.stickies.contains(where: { $0.key == event.key }) {
             state.stickies.append(event)
             scheduleStateSave()
+        }
+    }
+
+    // MARK: panels
+
+    private var panelTimes: [Date] = []
+    private var panelsHeld = 0
+    /// At most this many panels a minute from hubs; the rest wait in history
+    /// and one panel says how many, so a storm or a long sleep is one ping.
+    static let panelBurst = 3
+
+    /// `data.panel` on a hub event: the full pager panel, as a child process of
+    /// this binary with plain arguments (no shell). Pause quiets the stream,
+    /// not panels; muting the source or turning panels off stops them.
+    func raisePanel(_ event: AmbientEvent, _ request: AmbientPanelRequest) {
+        guard settings.panels, settings.sources[event.source]?.mute != true, event.dismissedAt == nil else {
+            AmbientLog.write("panel \(event.key) skipped (panels off or source muted)")
+            return
+        }
+        let now = Date()
+        panelTimes.removeAll { now.timeIntervalSince($0) > 60 }
+        guard panelTimes.count < Self.panelBurst else {
+            panelsHeld += 1
+            if panelsHeld == 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.flushHeldPanels() }
+            }
+            AmbientLog.write("panel \(event.key) held (\(panelsHeld) waiting)")
+            return
+        }
+        panelTimes.append(now)
+        launchPanel(AmbientPanelRequest.arguments(event, request, label: label(for: event)), key: event.key)
+    }
+
+    private func flushHeldPanels() {
+        let held = panelsHeld
+        panelsHeld = 0
+        guard held > 0 else { return }
+        launchPanel(["--title", "\(held) more panel\(held == 1 ? "" : "s") from your hubs",
+                     "--source", "ambient",
+                     "--body", "They arrived together, so they were held back. Every one of them is in the ambient history.",
+                     "--sound", "bell", "--pinned",
+                     "--action", "History:'" + AmbientCommands.binary.replacingOccurrences(of: "'", with: "'\\''") + "' ambient --history"],
+                    key: "held")
+    }
+
+    private func launchPanel(_ arguments: [String], key: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: AmbientCommands.binary)
+        task.arguments = arguments
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            AmbientLog.write("panel \(key) raised (pid \(task.processIdentifier))")
+        } catch {
+            AmbientLog.write("panel \(key) failed to start: \(error)")
         }
     }
 
