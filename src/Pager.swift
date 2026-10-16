@@ -2259,7 +2259,7 @@ final class Pager: NSObject, NSWindowDelegate, NSMenuDelegate {
         guard !options.pinned else { return }
         if active {
             if held == nil { held = max(deadline.timeIntervalSinceNow, 10) }
-            timer?.invalidate()
+            stopTimer()
         } else if let remaining = held {
             held = nil
             deadline = Date().addingTimeInterval(remaining)
@@ -2390,7 +2390,7 @@ final class Pager: NSObject, NSWindowDelegate, NSMenuDelegate {
         pinButton.set(symbol: options.pinned ? "pin.fill" : "pin")
         progress.isHidden = options.pinned
         if options.pinned {
-            timer?.invalidate()
+            stopTimer()
         } else {
             deadline = Date().addingTimeInterval(options.seconds)
             startTimer()
@@ -2455,17 +2455,43 @@ final class Pager: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     // MARK: timer and window
 
+    /// The bar is one linear animation from where it is now to zero, drawn by
+    /// the window server at the display's own refresh rate, so a 7 second
+    /// panel glides instead of stepping a few points per tick. One timer is
+    /// left, for the moment it runs out. Nothing wakes in between.
     private func startTimer() {
         timer?.invalidate()
-        // Tick roughly once per point the bar actually moves, rather than at a
-        // fixed 30fps. A three minute panel goes from 5400 wakeups to about 400.
-        let step = min(0.5, max(1.0 / 30.0, options.seconds / Double(max(width, 1))))
-        timer = Timer.scheduledTimer(withTimeInterval: step, repeats: true) { [weak self] tick in
-            guard let self, !self.options.pinned else { tick.invalidate(); return }
-            let left = self.deadline.timeIntervalSinceNow
-            if left <= 0 { tick.invalidate(); self.close("expired"); return }
-            self.progressWidth.constant = self.width * CGFloat(left / self.options.seconds)
+        let left = deadline.timeIntervalSinceNow
+        guard left > 0 else { close("expired"); return }
+        setBar(left: left, animated: false)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = left
+            context.timingFunction = CAMediaTimingFunction(name: .linear)
+            context.allowsImplicitAnimation = true
+            progressWidth.animator().constant = 0
         }
+        timer = Timer.scheduledTimer(withTimeInterval: left, repeats: false) { [weak self] _ in
+            guard let self, !self.options.pinned, self.held == nil else { return }
+            self.close("expired")
+        }
+    }
+
+    /// Pinning, or audio playing, stops the bar where it is. Setting the
+    /// constant with no animation replaces the running one at that width.
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+        setBar(left: max(0, held ?? deadline.timeIntervalSinceNow), animated: false)
+    }
+
+    private func setBar(left: TimeInterval, animated: Bool) {
+        let target = width * CGFloat(min(1, max(0, left / options.seconds)))
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated ? 0.2 : 0
+            context.allowsImplicitAnimation = animated
+            progressWidth.animator().constant = target
+        }
+        if !animated { progressWidth.constant = target }
     }
 
     /// Dragging detaches a panel: it gives up its slot so the stack closes the
@@ -2617,7 +2643,7 @@ let EXAMPLES = """
 
 """
 
-let VERSION = "1.0.0"
+let VERSION = "1.1.0"
 
 // More than one source file means the entry point has to be named. Everything
 // below runs in the order it always did, top to bottom.

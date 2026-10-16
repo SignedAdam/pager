@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 **Hub panels.** A hub event with `data.panel` also raises a full panel on the
 reader, once per event and at most three a minute (the rest fold into one),
@@ -35,6 +35,11 @@ anything.
 
 **Running it.** `--install` adds a LaunchAgent that starts at login and restarts
 after a crash; `--status`, `--demo` and `--selftest` do what they say.
+
+**Smoother countdown.** A panel's countdown bar is one linear animation drawn at
+the display's refresh rate instead of a timer nudging it a few points at a
+time, so short panels no longer stutter. Pinning and playing audio still stop
+it where it is, and it carries on from there.
 
 **Build.** The program is now every file in `src/`: `Pager.swift` (the panel,
 unchanged in behaviour) and `Ambient*.swift`. Still no dependencies, still

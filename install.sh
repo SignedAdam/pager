@@ -36,7 +36,8 @@ mkdir -p "$REPO/bin" "$BIN"
 
 if command -v swiftc >/dev/null 2>&1; then
   swiftc -O -parse-as-library -target "$(uname -m)-apple-macos13.0" -o "$REPO/bin/pager" "${SOURCES[@]}" "${FRAMEWORKS[@]}"
-  "$REPO/tools/local-sign.sh" "$REPO/bin/pager"
+  # A stable signature keeps macOS permissions across rebuilds; archives leave tools/ out.
+  [ -x "$REPO/tools/local-sign.sh" ] && "$REPO/tools/local-sign.sh" "$REPO/bin/pager"
   BUILT="compiled from source"
 elif [ -x "$REPO/dist/pager" ]; then
   # No compiler here, so use the universal binary that ships with the repo.
