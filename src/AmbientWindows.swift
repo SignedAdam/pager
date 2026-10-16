@@ -72,27 +72,21 @@ struct AmbientChoice<Value: Hashable>: View {
     }
 }
 
-/// On/off as a small pill: lime when on.
-struct AmbientPill: View {
+/// On/off as a settings row: the name, a dim hint, a small switch on the right.
+struct AmbientSwitchRow: View {
     let title: String
+    var hint: String? = nil
     @Binding var isOn: Bool
     var disabled = false
 
     var body: some View {
-        Button { isOn.toggle() } label: {
-            HStack(spacing: 5) {
-                Circle().fill(isOn ? AmbientTheme.lime : AmbientTheme.faint.opacity(0.5)).frame(width: 5, height: 5)
-                Text(title).lineLimit(1)
-            }
-            .font(.system(size: 11.5))
-            .foregroundColor(isOn ? AmbientTheme.text : AmbientTheme.dim)
-            .padding(.horizontal, 9).padding(.vertical, 5)
-            .background(Capsule().fill(isOn ? AmbientTheme.lime.opacity(0.1) : AmbientTheme.raised))
-            .overlay(Capsule().strokeBorder(isOn ? AmbientTheme.lime.opacity(0.3) : AmbientTheme.hairline))
-            .contentShape(Capsule())
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title).font(.system(size: 12)).foregroundColor(AmbientTheme.text)
+            if let hint { Text(hint).font(.system(size: 11)).foregroundColor(AmbientTheme.faint).lineLimit(1) }
+            Spacer(minLength: 8)
+            Toggle("", isOn: $isOn).toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
         }
-        .buttonStyle(.plain)
-        .fixedSize()
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
     }
@@ -132,23 +126,31 @@ struct AmbientSettingsView: View {
                     .foregroundColor(AmbientTheme.text)
                 Text("Settings").font(.system(size: 14, weight: .semibold)).foregroundColor(AmbientTheme.text)
                 Spacer()
-                AmbientPill(title: store.paused ? "Paused" : "Live", isOn: Binding(
-                    get: { !store.paused }, set: { $0 ? store.resume() : store.pause(until: nil) }))
+                Text(store.paused ? "Paused" : "Live").font(.system(size: 12))
+                    .foregroundColor(store.paused ? AmbientTheme.amber : AmbientTheme.lime)
+                Toggle("", isOn: Binding(get: { !store.paused },
+                                         set: { $0 ? store.resume() : store.pause(until: nil) }))
+                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
             }
             .padding(.horizontal, 16).padding(.top, 34).padding(.bottom, 12)
-            ScrollView {
+            // The content is pinned to the window's width, so no row can push the
+            // cards out to the window edges.
+            GeometryReader { geometry in
+                ScrollView {
                 VStack(spacing: 10) {
-                    Card(title: "Layout") { layout }
-                    Card(title: "Spacing") { spacing }
-                    Card(title: "Lines") { lines }
-                    Card(title: "Look") { look }
-                    Card(title: "Effects", trailing: effectsNote) { effects }
-                    Card(title: "Sources", trailing: "override what events ask for") { AmbientSourcesView(store: store) }
-                    Card(title: "Hubs") { AmbientConnectionsView(store: store) }
-                    Text(AmbientPaths.settings.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                        .font(AmbientTheme.mono(10)).foregroundColor(AmbientTheme.faint).padding(.top, 2)
+                        Card(title: "Layout") { layout }
+                        Card(title: "Spacing") { spacing }
+                        Card(title: "Lines") { lines }
+                        Card(title: "Look") { look }
+                        Card(title: "Effects", trailing: effectsNote) { effects }
+                        Card(title: "Sources", trailing: "override what events ask for") { AmbientSourcesView(store: store) }
+                        Card(title: "Hubs") { AmbientConnectionsView(store: store) }
+                        Text(AmbientPaths.settings.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                            .font(AmbientTheme.mono(10)).foregroundColor(AmbientTheme.faint).padding(.top, 2)
+                    }
+                    .frame(width: max(0, geometry.size.width - 36))
+                    .padding(.horizontal, 18).padding(.bottom, 18)
                 }
-                .padding(.horizontal, 14).padding(.bottom, 16)
             }
         }
         .tint(AmbientTheme.lime)
@@ -219,20 +221,16 @@ struct AmbientSettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             slider("Shade", Binding(get: { store.settings.shade * 100 }, set: { store.settings.shade = $0 / 100 }),
                    0...100, step: 5, unit: "%")
-            HStack(spacing: 6) {
-                AmbientPill(title: "Source icons", isOn: $store.settings.sourceIcons)
-                AmbientPill(title: "Ages", isOn: $store.settings.ages)
-                AmbientPill(title: "Middle-click closes", isOn: $store.settings.middleClick)
-                AmbientPill(title: "Hub panels", isOn: $store.settings.panels)
-                    .help("Events that ask for a panel (data.panel) also raise one")
-            }
-            HStack(spacing: 6) {
-                AmbientPill(title: "Type icons", isOn: $store.settings.icons)
-                AmbientPill(title: "Cards", isOn: $store.settings.cards)
-                AmbientPill(title: "Details", isOn: $store.settings.details, disabled: !store.settings.cards)
-                    .help("Shown inside cards")
-                AmbientPill(title: "Hard backdrop", isOn: $store.settings.backdrop)
-            }
+            Rectangle().fill(AmbientTheme.hairline).frame(height: 1).padding(.vertical, 2)
+            AmbientSwitchRow(title: "Source icons", hint: "GitHub, Stripe\u{2026} marks", isOn: $store.settings.sourceIcons)
+            AmbientSwitchRow(title: "Ages", hint: "now, 4m, 2h", isOn: $store.settings.ages)
+            AmbientSwitchRow(title: "Type icons", isOn: $store.settings.icons)
+            AmbientSwitchRow(title: "Cards", isOn: $store.settings.cards)
+            AmbientSwitchRow(title: "Details in cards", isOn: $store.settings.details, disabled: !store.settings.cards)
+            AmbientSwitchRow(title: "Hard backdrop", hint: "instead of the shade", isOn: $store.settings.backdrop)
+            Rectangle().fill(AmbientTheme.hairline).frame(height: 1).padding(.vertical, 2)
+            AmbientSwitchRow(title: "Middle-click closes", isOn: $store.settings.middleClick)
+            AmbientSwitchRow(title: "Hub panels", hint: "events may raise a panel", isOn: $store.settings.panels)
         }
     }
 
@@ -240,6 +238,8 @@ struct AmbientSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             row("Effect") {
                 AmbientChoice(options: TextEffect.allCases.map { ($0, $0.label) }, selection: $store.settings.effect)
+            }
+            row("Apply to") {
                 AmbientChoice(options: EffectTarget.allCases.map { ($0, $0.label) }, selection: $store.settings.target)
             }
             slider("Cycle", $store.settings.period, 0.5...10, step: 0.5, unit: "s")
@@ -270,8 +270,8 @@ struct AmbientSourcesView: View {
             } else {
                 HStack(spacing: 6) {
                     Text("source").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("stays").frame(width: 62, alignment: .leading)
-                    Text("colour").frame(width: 72, alignment: .leading)
+                    Text("stays").padding(.leading, 9).frame(width: 62, alignment: .leading)
+                    Text("colour").padding(.leading, 9).frame(width: 72, alignment: .leading)
                     Text("mute").frame(width: 34)
                 }
                 .font(.system(size: 10)).foregroundColor(AmbientTheme.faint)
@@ -511,7 +511,8 @@ struct AmbientHistoryView: View {
                               selection: $source, icon: "square.stack")
                 AmbientChoice(options: Severity.allCases.map { ($0.rank, $0 == .debug ? "Any level" : "\($0.rawValue.capitalized) and up") },
                               selection: $severity, icon: "exclamationmark.triangle")
-                AmbientPill(title: "Hide dismissed", isOn: $hideDismissed)
+                Toggle("Hide dismissed", isOn: $hideDismissed).toggleStyle(.checkbox).controlSize(.small)
+                    .font(.system(size: 11.5)).foregroundColor(AmbientTheme.dim)
                 Spacer()
             }
         }

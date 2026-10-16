@@ -130,7 +130,7 @@ enum AmbientSnapshot {
         switch which {
         case "menu": root = AnyView(AmbientMenuView(store: store, actions: actions, middleClickNeedsPermission: true))
         case "history": root = AnyView(AmbientHistoryView(store: store)); size = NSSize(width: 720, height: 620)
-        case "settings": root = AnyView(AmbientSettingsView(store: store)); size = NSSize(width: 400, height: 720)
+        case "settings": root = AnyView(AmbientSettingsView(store: store)); size = NSSize(width: 400, height: 1180)
         case "icon":
             root = AnyView(HStack(spacing: 30) {
                 ForEach([false, true], id: \.self) { paused in
