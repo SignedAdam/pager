@@ -13,7 +13,7 @@ set -euo pipefail
 NAME="Pager Local Signing"
 ID="com.signedadam.pager"
 
-identity() { security find-identity -p codesigning 2>/dev/null | grep "\"$NAME\"" | head -1 | awk '{print $2}'; }
+identity() { security find-identity -p codesigning 2>/dev/null | grep "\"$NAME\"" | head -1 | awk '{print $2}' || true; }
 
 if [ "${1:-}" = "--setup" ]; then
   if [ -n "$(identity)" ]; then echo "  already set up: $NAME"; exit 0; fi
