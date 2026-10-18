@@ -209,6 +209,34 @@ struct AmbientEventRow: View {
     }
 }
 
+/// A log line in the menu bar panel. A line still on screen gets a close
+/// button when you point at it, for anyone without a middle button.
+struct AmbientMenuRow: View {
+    @ObservedObject var store: AmbientStore
+    let event: AmbientEvent
+    let onScreen: Bool
+    let dismiss: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            AmbientEventRow(store: store, event: event, sourceWidth: 80)
+            if onScreen {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        .frame(width: 16, height: 14)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(hover ? AmbientTheme.text : AmbientTheme.faint)
+                .help("Dismiss")
+                .opacity(hover ? 1 : 0.35)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+    }
+}
+
 // MARK: - the menu bar panel
 
 struct AmbientMenuActions {
@@ -218,6 +246,8 @@ struct AmbientMenuActions {
     var openSettings: () -> Void
     var allowMiddleClick: () -> Void
     var quit: () -> Void
+    var dismiss: (String) -> Void = { _ in }
+    var dismissAll: () -> Void = {}
 }
 
 /// A pause button that opens its choices as a native menu.
@@ -299,6 +329,9 @@ struct AmbientMenuView: View {
             }
             .help(connections.map { "\($0.name): \(store.phases[$0.id] ?? "idle") \u{00B7} \($0.url)" }.joined(separator: "\n"))
             Spacer(minLength: 4)
+            if !store.lines.isEmpty {
+                AmbientIconButton(symbol: "xmark.circle", help: "Clear the screen (\u{2303}\u{2325}\u{21E7}\u{232B})") { actions.dismissAll() }
+            }
             AmbientPauseMenu(paused: store.paused, actions: actions)
             AmbientIconButton(symbol: "list.bullet.rectangle", help: "Event log") { actions.openLog() }
             AmbientIconButton(symbol: "gearshape", help: "Settings") { actions.openSettings() }
@@ -313,7 +346,9 @@ struct AmbientMenuView: View {
                 Text("Nothing yet").foregroundColor(AmbientTheme.faint).padding(.vertical, 4)
             }
             ForEach(events, id: \.key) { event in
-                AmbientEventRow(store: store, event: event, sourceWidth: 80)
+                AmbientMenuRow(store: store, event: event, onScreen: store.lines.contains { $0.id == event.key }) {
+                    actions.dismiss(event.key)
+                }
             }
         }
     }

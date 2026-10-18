@@ -22,6 +22,7 @@ enum Ambient {
       --history              open the history window
       --quit                 stop the running overlay
       --pause <15m|1h|tomorrow|off>   quiet for a while; --resume ends it
+      --dismiss newest|all   close lines from the keyboard (also ⌃⌥⌫ and ⌃⌥⇧⌫)
       --install              run at login and restart on crash (LaunchAgent)
       --uninstall            remove the LaunchAgent
       --selftest             check the parts that need no screen
@@ -72,6 +73,12 @@ enum Ambient {
         case "--quit": return AmbientCommands.send(["op": "quit"], done: "stopped")
         case "--pause": return AmbientCommands.pause(arguments.dropFirst().first ?? "")
         case "--resume": return AmbientCommands.send(["op": "pause", "paused": false], done: "resumed")
+        case "--dismiss":
+            let which = arguments.dropFirst().first ?? "newest"
+            guard which == "newest" || which == "all" else {
+                FileHandle.standardError.write(Data("usage: pager ambient --dismiss newest|all\n".utf8)); return 2
+            }
+            return AmbientCommands.send(["op": "dismiss", "which": which], done: which == "all" ? "cleared" : "dismissed")
         case "--settings": return AmbientCommands.send(["op": "settings"], done: nil)
         case "--history": return AmbientCommands.send(["op": "history"], done: nil)
         case "--demo":
@@ -196,6 +203,7 @@ enum AmbientCommands {
             line("last event", "none yet")
         }
         if let middle = reply?["middle_click"] as? String { line("click", "middle-click " + middle) }
+        if let keys = reply?["shortcuts"] as? String { line("keys", keys) }
         if let reply { line("on screen", "\(reply["visible"] as? Int ?? 0) line(s), \(reply["history"] as? Int ?? 0) in history") }
         print("")
         return 0

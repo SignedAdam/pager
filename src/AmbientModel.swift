@@ -479,6 +479,11 @@ struct AmbientSettings: Codable, Equatable {
     var details = false
     var ages = true
     var middleClick = true
+    /// ⌃⌥⌫ closes the newest line, ⌃⌥⇧⌫ all of them: for trackpads and keyboards.
+    var shortcuts = true
+    /// A sticky line leaves the screen after this many hours (it stays open in
+    /// the log and on the hub). 0 keeps it until dismissed.
+    var stickyHours = 12.0
     /// Hub events that carry `data.panel` also raise a pager panel.
     var panels = true
     var sources: [String: SourceOverride] = [:]
@@ -490,6 +495,7 @@ struct AmbientSettings: Codable, Equatable {
         case rowGap = "row_gap", rowPadding = "row_padding", sidePadding = "side_padding"
         case columnGap = "column_gap", sourceWidth = "source_width", fontSize = "font_size"
         case maxLines = "max_lines", middleClick = "middle_click", sourceIcons = "source_icons"
+        case shortcuts, stickyHours = "sticky_hours"
     }
 
     init() {}
@@ -509,7 +515,8 @@ struct AmbientSettings: Codable, Equatable {
         layout = v(.layout, d.layout); effect = v(.effect, d.effect); target = v(.target, d.target)
         period = v(.period, d.period); cards = v(.cards, d.cards); icons = v(.icons, d.icons)
         backdrop = v(.backdrop, d.backdrop); shade = v(.shade, d.shade); sourceIcons = v(.sourceIcons, d.sourceIcons); details = v(.details, d.details); ages = v(.ages, d.ages)
-        middleClick = v(.middleClick, d.middleClick); panels = v(.panels, d.panels); sources = v(.sources, d.sources)
+        middleClick = v(.middleClick, d.middleClick); shortcuts = v(.shortcuts, d.shortcuts)
+        stickyHours = v(.stickyHours, d.stickyHours); panels = v(.panels, d.panels); sources = v(.sources, d.sources)
         connections = v(.connections, d.connections)
         sanitize()
     }
@@ -532,6 +539,7 @@ struct AmbientSettings: Codable, Equatable {
         period = clamp(period, 0.5, 10, 2)
         maxLines = min(100, max(1, maxLines))
         shade = clamp(shade, 0, 1, 0.6)
+        stickyHours = clamp(stickyHours, 0, 24 * 30, 12)
         lines = min(5, max(1, lines))
         screen = max(0, screen)
         if !AmbientSettings.corners.contains(corner) { corner = "top-right" }
@@ -566,6 +574,8 @@ struct ResolvedPresentation: Equatable {
     var lines: Int
     var muted: Bool
     var brand: AmbientBrand?
+    /// How long a sticky line may stay on screen; nil = until dismissed.
+    var stickyLimit: TimeInterval? = nil
 }
 
 enum AmbientRules {
@@ -598,7 +608,8 @@ enum AmbientRules {
             sourceColor: validHex(source?.color) ?? AmbientBrand.readable(validHex(event.sourceColor) ?? brand?.color),
             lines: min(5, max(1, display.lines ?? settings.lines)),
             muted: source?.mute ?? false,
-            brand: brand)
+            brand: brand,
+            stickyLimit: settings.stickyHours > 0 ? settings.stickyHours * 3600 : nil)
     }
 
     /// The emphasis colour when the event does not pick one: bad news red,
@@ -653,7 +664,9 @@ enum AmbientRules {
         if event.dismissedAt != nil || resolved.muted { return Decision(show: false, expires: nil, fresh: fresh) }
         switch resolved.lifetime {
         case .sticky:
-            return Decision(show: true, expires: nil, fresh: fresh)
+            guard let limit = resolved.stickyLimit else { return Decision(show: true, expires: nil, fresh: fresh) }
+            let expires = anchor.addingTimeInterval(limit)
+            return Decision(show: expires > now, expires: expires, fresh: fresh)
         case .seconds(let seconds):
             let expires = anchor.addingTimeInterval(seconds)
             return Decision(show: expires.timeIntervalSince(now) > 0.5, expires: expires, fresh: fresh)

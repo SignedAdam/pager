@@ -154,7 +154,12 @@ enum AmbientSelfTest {
         event.display = AmbientDisplay(lifetime: .sticky)
         look = AmbientRules.resolve(event, settings)
         decision = AmbientRules.decide(event, look, now: now)
-        expect(decision.show && decision.expires == nil, "sticky always shows")
+        expect(decision.show && decision.expires != nil, "sticky shows, and by default leaves after 12 h")
+        expect(!AmbientRules.decide(event, look, now: now.addingTimeInterval(13 * 3600)).show, "an old sticky leaves the screen")
+        var forever = settings
+        forever.stickyHours = 0
+        decision = AmbientRules.decide(event, AmbientRules.resolve(event, forever), now: now.addingTimeInterval(86_400 * 3))
+        expect(decision.show && decision.expires == nil, "sticky_hours 0 keeps it until dismissed")
         event.dismissedAt = now
         expect(!AmbientRules.decide(event, look, now: now).show, "dismissed sticky does not")
         event.dismissedAt = nil

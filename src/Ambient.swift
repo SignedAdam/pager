@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import SwiftUI
 
@@ -44,6 +45,7 @@ struct AmbientLine: Identifiable, Equatable {
     var rowFrames: [String: CGRect] = [:]
     var hubs: [String: HubClient] = [:]
     var geometryChanged: (() -> Void)?
+    var shortcutsChanged: (() -> Void)?
     var demoFinished: (() -> Void)?
     /// Where `Demo burst` continues from, like the prototype's Next.
     var demoCursor = 0
@@ -66,10 +68,20 @@ struct AmbientLine: Identifiable, Equatable {
             // "Until resumed" is stored as the far future, shown as no time at all.
             pausedUntil = until > Date().addingTimeInterval(400 * 86_400) ? nil : until
         }
-        ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        // In the common modes, so lines still leave while a menu is open; and
+        // with App Nap off, which would otherwise stretch this timer to minutes
+        // when nothing else is happening and leave lines up long past their time.
+        let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        ticker.tolerance = 0.1
+        RunLoop.main.add(ticker, forMode: .common)
+        self.ticker = ticker
+        awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep],
+                                                      reason: "ambient lines expire on time")
     }
+
+    private var awake: NSObjectProtocol?
 
     var activeConnections: [AmbientConnection] {
         AmbientCredentials.connections(settings).filter(\.enabled)
@@ -212,7 +224,7 @@ struct AmbientLine: Identifiable, Equatable {
         withAnimation(.easeOut(duration: 0.4)) {
             var index = lines.count - 1
             while overflow > 0 && index >= 0 {
-                if lines[index].expires != nil { lines.remove(at: index); overflow -= 1 }
+                if !lines[index].look.lifetime.isSticky { lines.remove(at: index); overflow -= 1 }
                 index -= 1
             }
         }
@@ -230,6 +242,17 @@ struct AmbientLine: Identifiable, Equatable {
 
     private func event(forKey key: String) -> AmbientEvent? {
         history.first(where: { $0.key == key }) ?? lines.first(where: { $0.id == key })?.event
+    }
+
+    /// ⌃⌥⌫, the menu bar panel, or `pager ambient --dismiss newest`.
+    func dismissNewest() {
+        guard let newest = lines.first else { return }
+        dismiss(newest.id)
+    }
+
+    /// ⌃⌥⇧⌫ or `--dismiss all`: every line on screen, stickies included.
+    func dismissAll() {
+        for line in lines { dismiss(line.id) }
     }
 
     /// Middle-click, the history window, or `pager ambient` over the socket.
@@ -426,6 +449,7 @@ struct AmbientLine: Identifiable, Equatable {
         settingsSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
         geometryChanged?()
+        if old.shortcuts != settings.shortcuts { shortcutsChanged?() }
         if old.connections != settings.connections { startHubs() }
     }
 
@@ -771,6 +795,8 @@ final class AmbientPanel: NSPanel {
                                                               name: NSWorkspace.didWakeNotification, object: nil)
             store.restoreLocalStickies()
             store.startHubs()
+            store.shortcutsChanged = { [weak self] in self?.updateShortcuts() }
+            updateShortcuts()
             AmbientLog.write("ambient started, pid \(getpid())")
         case .demo(let count, let interval):
             store.demoFinished = { NSApp.terminate(nil) }
@@ -812,6 +838,41 @@ final class AmbientPanel: NSPanel {
         return hit.key
     }
 
+    // MARK: keyboard
+
+    /// ⌃⌥⌫ closes the newest line, ⌃⌥⇧⌫ every line on screen. Carbon hot
+    /// keys need no permission and never take focus from the app in front.
+    private var hotKeys: [EventHotKeyRef] = []
+    private var hotKeyHandler: EventHandlerRef?
+
+    private func updateShortcuts() {
+        for key in hotKeys { UnregisterEventHotKey(key) }
+        hotKeys = []
+        guard store.settings.shortcuts else { return }
+        if hotKeyHandler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            let callback: EventHandlerUPP = { _, event, info in
+                guard let event, let info else { return OSStatus(eventNotHandledErr) }
+                var id = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                  nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
+                let app = Unmanaged<AmbientApp>.fromOpaque(info).takeUnretainedValue()
+                MainActor.assumeIsolated { id.id == 2 ? app.store.dismissAll() : app.store.dismissNewest() }
+                return noErr
+            }
+            InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec,
+                                Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandler)
+        }
+        let signature = OSType(0x5047_414D) // "PGAM"
+        for (id, modifiers) in [(UInt32(1), controlKey | optionKey), (UInt32(2), controlKey | optionKey | shiftKey)] {
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(UInt32(kVK_Delete), UInt32(modifiers), EventHotKeyID(signature: signature, id: id),
+                                             GetApplicationEventTarget(), 0, &ref)
+            if status == noErr, let ref { hotKeys.append(ref) }
+            else { AmbientLog.write("shortcut \(id == 1 ? "⌃⌥⌫" : "⌃⌥⇧⌫") is taken by another app (\(status))") }
+        }
+    }
+
     /// With Accessibility allowed, an event tap takes the middle-click that
     /// lands on a line, so the app underneath never sees it. Every other
     /// click, and a middle-click anywhere else, goes through untouched.
@@ -819,6 +880,7 @@ final class AmbientPanel: NSPanel {
         guard middleClickTap == nil else { return true }
         guard AXIsProcessTrusted() else { return false }
         let mask = (1 << CGEventType.otherMouseDown.rawValue) | (1 << CGEventType.otherMouseUp.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, info in
             guard let info else { return Unmanaged.passUnretained(event) }
             let app = Unmanaged<AmbientApp>.fromOpaque(info).takeUnretainedValue()
@@ -840,7 +902,20 @@ final class AmbientPanel: NSPanel {
             if let middleClickTap { CGEvent.tapEnable(tap: middleClickTap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard event.getIntegerValueField(.mouseEventButtonNumber) == 2 else { return Unmanaged.passUnretained(event) }
+        // ⌥-click does what middle-click does, for a trackpad. A plain click
+        // always goes through.
+        let left = type == .leftMouseDown || type == .leftMouseUp
+        if left {
+            if type == .leftMouseUp {
+                defer { middleClickSwallowed = false }
+                return middleClickSwallowed ? nil : Unmanaged.passUnretained(event)
+            }
+            guard event.flags.contains(.maskAlternate),
+                  !event.flags.contains(.maskCommand), !event.flags.contains(.maskControl)
+            else { return Unmanaged.passUnretained(event) }
+        } else if event.getIntegerValueField(.mouseEventButtonNumber) != 2 {
+            return Unmanaged.passUnretained(event)
+        }
         if type == .otherMouseUp {
             defer { middleClickSwallowed = false }
             return middleClickSwallowed ? nil : Unmanaged.passUnretained(event)
@@ -941,7 +1016,8 @@ final class AmbientPanel: NSPanel {
         case "ping", "status":
             return store.status().merging(["ok": true,
                                            "middle_click": !store.settings.middleClick ? "off"
-                                               : middleClickTap != nil ? "on" : "needs Accessibility"],
+                                               : middleClickTap != nil ? "on, and \u{2325}-click" : "needs Accessibility",
+                                           "shortcuts": hotKeys.isEmpty ? "off" : "\u{2303}\u{2325}\u{232B} newest, \u{2303}\u{2325}\u{21E7}\u{232B} all"],
                                           uniquingKeysWith: { $1 })
         case "event":
             guard let object = request["event"],
@@ -950,6 +1026,12 @@ final class AmbientPanel: NSPanel {
             event.origin = "local"
             store.ingest(event)
             return ["ok": true, "id": event.id, "shown": store.lines.contains(where: { $0.id == event.id })]
+        case "dismiss" where request["which"] as? String == "newest":
+            store.dismissNewest()
+            return ["ok": true]
+        case "dismiss" where request["which"] as? String == "all":
+            store.dismissAll()
+            return ["ok": true]
         case "dismiss":
             guard let key = (request["key"] as? String)
                     ?? (request["id"] as? String).map({ $0.contains("/") ? $0 : "local/" + $0 })
@@ -1015,7 +1097,9 @@ final class AmbientPanel: NSPanel {
             openLog: { [weak self] in self?.closePanel(); self?.showHistory() },
             openSettings: { [weak self] in self?.closePanel(); self?.showSettings() },
             allowMiddleClick: { [weak self] in self?.closePanel(); self?.askAccessibility() },
-            quit: { NSApp.terminate(nil) })
+            quit: { NSApp.terminate(nil) },
+            dismiss: { [weak self] key in self?.store.dismiss(key) },
+            dismissAll: { [weak self] in self?.store.dismissAll() })
         let view = AmbientMenuView(store: store, actions: actions,
                                    middleClickNeedsPermission: store.settings.middleClick && middleClickTap == nil)
         let host = NSHostingView(rootView: view)

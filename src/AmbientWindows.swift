@@ -207,6 +207,13 @@ struct AmbientSettingsView: View {
                     .frame(width: 64)
                 Text("lines at most").font(.system(size: 11.5)).foregroundColor(AmbientTheme.faint)
             }
+            row("Stickies") {
+                AmbientField(placeholder: "12", text: Binding(
+                    get: { store.settings.stickyHours == store.settings.stickyHours.rounded() ? String(Int(store.settings.stickyHours)) : String(store.settings.stickyHours) },
+                    set: { if let v = Double($0) { store.settings.stickyHours = min(720, max(0, v)) } }), mono: true)
+                    .frame(width: 64)
+                Text("hours on screen, 0 = until dismissed").font(.system(size: 11.5)).foregroundColor(AmbientTheme.faint)
+            }
             row("Each event") {
                 AmbientField(placeholder: "1", text: Binding(
                     get: { String(store.settings.lines) },
@@ -229,7 +236,8 @@ struct AmbientSettingsView: View {
             AmbientSwitchRow(title: "Details in cards", isOn: $store.settings.details, disabled: !store.settings.cards)
             AmbientSwitchRow(title: "Hard backdrop", hint: "instead of the shade", isOn: $store.settings.backdrop)
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1).padding(.vertical, 2)
-            AmbientSwitchRow(title: "Middle-click closes", isOn: $store.settings.middleClick)
+            AmbientSwitchRow(title: "Middle-click closes", hint: "or \u{2325}-click", isOn: $store.settings.middleClick)
+            AmbientSwitchRow(title: "Keyboard", hint: "\u{2303}\u{2325}\u{232B} newest \u{00B7} \u{2303}\u{2325}\u{21E7}\u{232B} all", isOn: $store.settings.shortcuts)
             AmbientSwitchRow(title: "Hub panels", hint: "events may raise a panel", isOn: $store.settings.panels)
         }
     }
