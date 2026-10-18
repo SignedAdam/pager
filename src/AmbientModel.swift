@@ -480,7 +480,7 @@ struct AmbientSettings: Codable, Equatable {
     var ages = true
     var middleClick = true
     /// ⌃⌥⌫ closes the newest line, ⌃⌥⇧⌫ all of them: for trackpads and keyboards.
-    var shortcuts = true
+    var shortcuts = false
     /// A sticky line leaves the screen after this many hours (it stays open in
     /// the log and on the hub). 0 keeps it until dismissed.
     var stickyHours = 12.0

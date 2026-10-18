@@ -46,6 +46,9 @@ struct AmbientLine: Identifiable, Equatable {
     var hubs: [String: HubClient] = [:]
     var geometryChanged: (() -> Void)?
     var shortcutsChanged: (() -> Void)?
+    /// The line under the pointer, which shows its close button.
+    @Published var hovered: String?
+    var hoverChanged: (() -> Void)?
     var demoFinished: (() -> Void)?
     /// Where `Demo burst` continues from, like the prototype's Next.
     var demoCursor = 0
@@ -235,6 +238,7 @@ struct AmbientLine: Identifiable, Equatable {
         if paused, let until = pausedUntil, until <= now { resume() }
         guard lines.contains(where: { ($0.expires ?? .distantFuture) <= now }) else { return }
         withAnimation(.easeOut(duration: 0.65)) { lines.removeAll { ($0.expires ?? .distantFuture) <= now } }
+        if let hovered, !lines.contains(where: { $0.id == hovered }) { hoverChanged?() }
         if lines.isEmpty, demoTimer == nil { demoFinished?() }
     }
 
@@ -258,6 +262,7 @@ struct AmbientLine: Identifiable, Equatable {
     /// Middle-click, the history window, or `pager ambient` over the socket.
     func dismiss(_ key: String) {
         withAnimation(.easeOut(duration: 0.35)) { lines.removeAll { $0.id == key } }
+        if hovered == key { hovered = nil; hoverChanged?() }
         setDismissed(key, Date(), propagate: true)
     }
 
@@ -512,7 +517,9 @@ struct AmbientOverlay: View {
         let corner: Alignment = top ? (right ? .topTrailing : .topLeading) : (right ? .bottomTrailing : .bottomLeading)
         VStack(alignment: right ? .trailing : .leading, spacing: s.rowGap) {
             ForEach(ordered) { line in
-                AmbientRow(line: line, settings: s, right: right)
+                AmbientRow(line: line, settings: s, right: right, hovered: store.hovered == line.id) {
+                    store.dismiss(line.id)
+                }
                     .padding(.vertical, s.rowPadding)
                     .padding(.horizontal, s.sidePadding)
                     .frame(width: s.width, alignment: right ? .trailing : .leading)
@@ -616,6 +623,25 @@ struct AmbientRow: View {
     let line: AmbientLine
     let settings: AmbientSettings
     var right = true
+    var hovered = false
+    var dismiss: () -> Void = {}
+
+    /// The close button sits just outside the line, on its open side, so
+    /// nothing in the line moves when it appears.
+    private var close: some View {
+        Button(action: dismiss) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: settings.fontSize + 1))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(Color.white.opacity(0.9), Color.black.opacity(0.55))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Dismiss")
+        .offset(x: right ? -24 : 24)
+        .transition(.opacity)
+    }
 
     private var accent: Color { Color(hex: line.look.accent) ?? .white }
     private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.85) ?? .white.opacity(0.5) }
@@ -628,7 +654,11 @@ struct AmbientRow: View {
     }
 
     var body: some View {
-        if settings.cards { card } else { plain }
+        Group { if settings.cards { card } else { plain } }
+            .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.white.opacity(hovered ? 0.07 : 0)).padding(-3))
+            .overlay(alignment: right ? .leading : .trailing) { if hovered { close } }
+            .animation(.easeOut(duration: 0.12), value: hovered)
     }
 
     private var message: some View {
@@ -737,6 +767,12 @@ final class AmbientMenuPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onClose() }
 }
 
+/// The first click on a line's close button counts, even though the overlay
+/// never becomes the key window.
+final class AmbientHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class AmbientPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -778,13 +814,14 @@ final class AmbientPanel: NSPanel {
         panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
-        panel.contentView = NSHostingView(rootView: AmbientOverlay(store: store))
+        panel.contentView = AmbientHostingView(rootView: AmbientOverlay(store: store))
         store.geometryChanged = { [weak self] in self?.positionOverlay() }
         positionOverlay()
         panel.orderFrontRegardless()
         NotificationCenter.default.addObserver(self, selector: #selector(positionOverlay),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         watchMiddleClicks()
+        watchHover()
         handleSignals()
 
         switch mode {
@@ -829,11 +866,11 @@ final class AmbientPanel: NSPanel {
     // MARK: middle click
 
     /// The hit test, in screen coordinates (Cocoa, bottom-left origin).
-    fileprivate func line(at point: NSPoint) -> String? {
-        guard store.settings.middleClick, let panel, panel.frame.contains(point) else { return nil }
+    fileprivate func line(at point: NSPoint, reach: CGFloat = 0) -> String? {
+        guard let panel, panel.frame.contains(point) else { return nil }
         let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
         let slack = store.settings.rowGap / 2
-        guard let hit = store.rowFrames.first(where: { _, frame in frame.insetBy(dx: 0, dy: -slack).contains(local) }),
+        guard let hit = store.rowFrames.first(where: { _, frame in frame.insetBy(dx: -reach, dy: -slack).contains(local) }),
               store.lines.contains(where: { $0.id == hit.key }) else { return nil }
         return hit.key
     }
@@ -880,7 +917,6 @@ final class AmbientPanel: NSPanel {
         guard middleClickTap == nil else { return true }
         guard AXIsProcessTrusted() else { return false }
         let mask = (1 << CGEventType.otherMouseDown.rawValue) | (1 << CGEventType.otherMouseUp.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, info in
             guard let info else { return Unmanaged.passUnretained(event) }
             let app = Unmanaged<AmbientApp>.fromOpaque(info).takeUnretainedValue()
@@ -902,20 +938,7 @@ final class AmbientPanel: NSPanel {
             if let middleClickTap { CGEvent.tapEnable(tap: middleClickTap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        // ⌥-click does what middle-click does, for a trackpad. A plain click
-        // always goes through.
-        let left = type == .leftMouseDown || type == .leftMouseUp
-        if left {
-            if type == .leftMouseUp {
-                defer { middleClickSwallowed = false }
-                return middleClickSwallowed ? nil : Unmanaged.passUnretained(event)
-            }
-            guard event.flags.contains(.maskAlternate),
-                  !event.flags.contains(.maskCommand), !event.flags.contains(.maskControl)
-            else { return Unmanaged.passUnretained(event) }
-        } else if event.getIntegerValueField(.mouseEventButtonNumber) != 2 {
-            return Unmanaged.passUnretained(event)
-        }
+        guard event.getIntegerValueField(.mouseEventButtonNumber) == 2 else { return Unmanaged.passUnretained(event) }
         if type == .otherMouseUp {
             defer { middleClickSwallowed = false }
             return middleClickSwallowed ? nil : Unmanaged.passUnretained(event)
@@ -923,7 +946,8 @@ final class AmbientPanel: NSPanel {
         // CG has its origin at the top of the main screen; Cocoa at the bottom.
         let p = event.location
         let height = NSScreen.screens.first?.frame.height ?? 0
-        guard let key = line(at: NSPoint(x: p.x, y: height - p.y)) else { return Unmanaged.passUnretained(event) }
+        guard store.settings.middleClick,
+              let key = line(at: NSPoint(x: p.x, y: height - p.y)) else { return Unmanaged.passUnretained(event) }
         middleClickSwallowed = true
         store.dismiss(key)
         return nil
@@ -947,6 +971,28 @@ final class AmbientPanel: NSPanel {
                 if self?.installMiddleClickTap() == true || tries > 90 { timer.invalidate() }
             }
         }
+    }
+
+    /// The overlay ignores the mouse, except over a line: there it takes the
+    /// pointer so the line can show its close button and a click lands on it
+    /// instead of the app below. Off a line, clicks go straight through again.
+    private func watchHover() {
+        let moved: (NSEvent) -> Void = { [weak self] _ in
+            let location = NSEvent.mouseLocation
+            Task { @MainActor in self?.hover(at: location) }
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved], handler: moved) { monitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved], handler: { moved($0); return $0 }) {
+            monitors.append(local)
+        }
+        store.hoverChanged = { [weak self] in self?.hover(at: NSEvent.mouseLocation) }
+    }
+
+    private func hover(at point: NSPoint) {
+        let key = line(at: point, reach: 30)
+        if store.hovered != key { store.hovered = key }
+        let ignore = key == nil
+        if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
     }
 
     private func watchMiddleClicks() {
@@ -974,7 +1020,7 @@ final class AmbientPanel: NSPanel {
     }
 
     private func middleClick(at point: NSPoint) {
-        guard let key = line(at: point) else { return }
+        guard store.settings.middleClick, let key = line(at: point) else { return }
         store.dismiss(key)
     }
 
@@ -1016,7 +1062,7 @@ final class AmbientPanel: NSPanel {
         case "ping", "status":
             return store.status().merging(["ok": true,
                                            "middle_click": !store.settings.middleClick ? "off"
-                                               : middleClickTap != nil ? "on, and \u{2325}-click" : "needs Accessibility",
+                                               : middleClickTap != nil ? "on" : "needs Accessibility",
                                            "shortcuts": hotKeys.isEmpty ? "off" : "\u{2303}\u{2325}\u{232B} newest, \u{2303}\u{2325}\u{21E7}\u{232B} all"],
                                           uniquingKeysWith: { $1 })
         case "event":

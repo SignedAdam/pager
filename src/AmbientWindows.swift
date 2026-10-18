@@ -236,7 +236,7 @@ struct AmbientSettingsView: View {
             AmbientSwitchRow(title: "Details in cards", isOn: $store.settings.details, disabled: !store.settings.cards)
             AmbientSwitchRow(title: "Hard backdrop", hint: "instead of the shade", isOn: $store.settings.backdrop)
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1).padding(.vertical, 2)
-            AmbientSwitchRow(title: "Middle-click closes", hint: "or \u{2325}-click", isOn: $store.settings.middleClick)
+            AmbientSwitchRow(title: "Middle-click closes", isOn: $store.settings.middleClick)
             AmbientSwitchRow(title: "Keyboard", hint: "\u{2303}\u{2325}\u{232B} newest \u{00B7} \u{2303}\u{2325}\u{21E7}\u{232B} all", isOn: $store.settings.shortcuts)
             AmbientSwitchRow(title: "Hub panels", hint: "events may raise a panel", isOn: $store.settings.panels)
         }

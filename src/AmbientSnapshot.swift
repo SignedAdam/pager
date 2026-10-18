@@ -74,6 +74,7 @@ enum AmbientSnapshot {
             store.ingest(event, record: false)
         }
         store.lines.sort { $0.anchor > $1.anchor }
+        if arguments.contains("--hover") { store.hovered = store.lines.dropFirst().first?.id }
         let width = settings.width + 12 + AmbientShadeGeometry.margin
         let size = CGSize(width: width + 80, height: 300)
         let backdrop = Backdrop(kind: kind).frame(width: size.width, height: size.height, alignment: .topLeading).clipped()
