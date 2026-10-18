@@ -510,12 +510,25 @@ struct AmbientOverlay: View {
     @ObservedObject var store: AmbientStore
     var blur = true
 
+    static let clearKey = "__clear_all"
+
+    /// Under the last line while any line is pointed at: close them all.
+    private var clearAll: some View {
+        AmbientClearAll(fontSize: store.settings.fontSize) { store.dismissAll() }
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: AmbientRowFrames.self,
+                                       value: [AmbientOverlay.clearKey: geometry.frame(in: .named("ambient"))])
+            })
+            .transition(.opacity)
+    }
+
     var body: some View {
         let s = store.settings
         let top = s.corner.hasPrefix("top"), right = s.corner.hasSuffix("right")
         let ordered = top ? store.lines : Array(store.lines.reversed())
         let corner: Alignment = top ? (right ? .topTrailing : .topLeading) : (right ? .bottomTrailing : .bottomLeading)
         VStack(alignment: right ? .trailing : .leading, spacing: s.rowGap) {
+            if !top, store.hovered != nil, store.lines.count > 1 { clearAll }
             ForEach(ordered) { line in
                 AmbientRow(line: line, settings: s, right: right, hovered: store.hovered == line.id) {
                     store.dismiss(line.id)
@@ -532,7 +545,9 @@ struct AmbientOverlay: View {
                     })
                     .transition(.opacity)
             }
+            if top, store.hovered != nil, store.lines.count > 1 { clearAll }
         }
+        .animation(.easeOut(duration: 0.15), value: store.hovered != nil)
         .background(AmbientShade(strength: s.shade, visible: !store.lines.isEmpty && !s.backdrop, corner: corner, blur: blur))
         // The panel reaches the screen edge; the stack sits 12 pt in from it as
         // before, with room on the open sides for the shade to fade out.
@@ -626,23 +641,6 @@ struct AmbientRow: View {
     var hovered = false
     var dismiss: () -> Void = {}
 
-    /// The close button sits just outside the line, on its open side, so
-    /// nothing in the line moves when it appears.
-    private var close: some View {
-        Button(action: dismiss) {
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: settings.fontSize + 1))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(Color.white.opacity(0.9), Color.black.opacity(0.55))
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Dismiss")
-        .offset(x: right ? -24 : 24)
-        .transition(.opacity)
-    }
-
     private var accent: Color { Color(hex: line.look.accent) ?? .white }
     private var sourceTint: Color { Color(hex: line.look.sourceColor)?.opacity(0.85) ?? .white.opacity(0.5) }
 
@@ -657,8 +655,13 @@ struct AmbientRow: View {
         Group { if settings.cards { card } else { plain } }
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(Color.white.opacity(hovered ? 0.07 : 0)).padding(-3))
-            .overlay(alignment: right ? .leading : .trailing) { if hovered { close } }
             .animation(.easeOut(duration: 0.12), value: hovered)
+    }
+
+    /// The age, which turns into the close button while the line is pointed at.
+    private var tail: some View {
+        AmbientTail(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize,
+                    showAge: settings.ages, hovered: hovered, dismiss: dismiss)
     }
 
     private var message: some View {
@@ -684,7 +687,7 @@ struct AmbientRow: View {
                 mark
             }
             message.frame(maxWidth: .infinity, alignment: right ? .trailing : .leading)
-            if settings.ages { AmbientAge(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize) }
+            tail
         }
         .font(.system(size: settings.fontSize))
         .modifier(AmbientHalo(strength: settings.backdrop ? 0 : settings.shade))
@@ -709,7 +712,7 @@ struct AmbientRow: View {
                             .foregroundColor(.white.opacity(0.5)).lineLimit(1).truncationMode(.middle)
                     }
                     Spacer(minLength: 0)
-                    if settings.ages { AmbientAge(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize) }
+                    tail
                 }
                 StyledMessage(text: line.event.text, color: accent, fontSize: settings.fontSize,
                               effect: line.animate ? line.look.effect : .none, target: line.look.target,
@@ -742,6 +745,71 @@ struct AmbientRow: View {
 }
 
 /// `now`, `12s`, `4m`, `3h`, `2d`, ticking once a second on its own.
+struct AmbientClearAll: View {
+    let fontSize: Double
+    let action: () -> Void
+    @State private var onButton = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "xmark").font(.system(size: max(8, fontSize - 3), weight: .semibold))
+                Text("Clear all").font(.system(size: max(10, fontSize - 1), weight: .medium))
+            }
+            .foregroundColor(.white.opacity(onButton ? 1 : 0.6))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.white.opacity(onButton ? 0.16 : 0.06)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { onButton = $0 }
+        .animation(.easeOut(duration: 0.12), value: onButton)
+        .padding(.top, 3)
+    }
+}
+
+/// The end of a line: its age, or, while the line is pointed at, an × in the
+/// same place. Pointing at the × itself lifts it onto a soft lit chip.
+struct AmbientTail: View {
+    let since: Date
+    let fontSize: Double
+    let showAge: Bool
+    let hovered: Bool
+    let dismiss: () -> Void
+    @State private var onButton = false
+
+    var body: some View {
+        let width = max(22, fontSize * 2)
+        ZStack(alignment: .trailing) {
+            if showAge {
+                AmbientAge(since: since, fontSize: fontSize).opacity(hovered ? 0 : 1)
+            }
+            if hovered {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: max(8, fontSize - 3), weight: onButton ? .bold : .semibold))
+                        .foregroundColor(.white.opacity(onButton ? 1 : 0.6))
+                        .frame(width: width, height: fontSize + 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.white.opacity(onButton ? 0.18 : 0))
+                                .shadow(color: .white.opacity(onButton ? 0.25 : 0), radius: 4))
+                        .scaleEffect(onButton ? 1.06 : 1)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+                .onHover { onButton = $0 }
+                .transition(.opacity)
+            }
+        }
+        .frame(minWidth: width, alignment: .trailing)
+        .animation(.easeOut(duration: 0.12), value: hovered)
+        .animation(.easeOut(duration: 0.12), value: onButton)
+    }
+}
+
 struct AmbientAge: View {
     let since: Date
     let fontSize: Double
@@ -870,7 +938,8 @@ final class AmbientPanel: NSPanel {
         guard let panel, panel.frame.contains(point) else { return nil }
         let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
         let slack = store.settings.rowGap / 2
-        guard let hit = store.rowFrames.first(where: { _, frame in frame.insetBy(dx: -reach, dy: -slack).contains(local) }),
+        guard let hit = store.rowFrames.first(where: { key, frame in
+                  key != AmbientOverlay.clearKey && frame.insetBy(dx: -reach, dy: -slack).contains(local) }),
               store.lines.contains(where: { $0.id == hit.key }) else { return nil }
         return hit.key
     }
@@ -989,7 +1058,12 @@ final class AmbientPanel: NSPanel {
     }
 
     private func hover(at point: NSPoint) {
-        let key = line(at: point, reach: 30)
+        var key = line(at: point, reach: 4)
+        // Moving down onto Clear all keeps the stream "pointed at".
+        if key == nil, store.hovered != nil, let frame = store.rowFrames[AmbientOverlay.clearKey], let panel {
+            let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
+            if frame.insetBy(dx: -6, dy: -6).contains(local) { key = store.hovered }
+        }
         if store.hovered != key { store.hovered = key }
         let ignore = key == nil
         if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
