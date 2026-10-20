@@ -535,7 +535,8 @@ struct AmbientOverlay: View {
         VStack(alignment: right ? .trailing : .leading, spacing: s.rowGap) {
             if !top, store.hovered != nil, store.lines.count > 1 { clearAll }
             ForEach(ordered) { line in
-                AmbientRow(line: line, settings: s, right: right, hovered: store.hovered == line.id) {
+                AmbientRow(line: line, settings: s, right: right, hovered: store.hovered == line.id,
+                           dimmed: store.hovered != nil && store.hovered != line.id) {
                     store.dismiss(line.id)
                 }
                     .padding(.vertical, s.rowPadding)
@@ -643,6 +644,8 @@ struct AmbientRow: View {
     let settings: AmbientSettings
     var right = true
     var hovered = false
+    /// Another line of the stream is pointed at.
+    var dimmed = false
     var dismiss: () -> Void = {}
 
     private var accent: Color { Color(hex: line.look.accent) ?? .white }
@@ -657,11 +660,9 @@ struct AmbientRow: View {
 
     var body: some View {
         Group { if settings.cards { card } else { plain } }
-            // Inside the row's own height (rows can sit with no gap at all), a
-            // little wider than the text.
-            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(Color.white.opacity(hovered ? 0.07 : 0))
-                .padding(.horizontal, -5).padding(.vertical, 0.5))
+            // No box: the line you point at stays bright, the others step back.
+            .opacity(dimmed ? 0.45 : 1)
+            .animation(.easeOut(duration: 0.12), value: dimmed)
             .animation(.easeOut(duration: 0.12), value: hovered)
     }
 
@@ -801,16 +802,15 @@ struct AmbientTail: View {
         .frame(width: width, alignment: .trailing)
         .overlay(alignment: .trailing) {
             if hovered {
+                // Just the ×, right where the age ends. Pointing at it makes it
+                // brighter and a touch larger, with a soft glow; no chip.
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
-                        .font(.system(size: max(8, fontSize - 3), weight: onButton ? .bold : .semibold))
-                        .foregroundColor(.white.opacity(onButton ? 1 : 0.6))
-                        .frame(width: width, height: fontSize + 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.white.opacity(onButton ? 0.18 : 0))
-                                .shadow(color: .white.opacity(onButton ? 0.25 : 0), radius: 4))
-                        .scaleEffect(onButton ? 1.06 : 1)
+                        .font(.system(size: max(8, fontSize - 3.5), weight: onButton ? .bold : .medium))
+                        .foregroundColor(.white.opacity(onButton ? 1 : 0.55))
+                        .shadow(color: .white.opacity(onButton ? 0.6 : 0), radius: 3)
+                        .scaleEffect(onButton ? 1.2 : 1, anchor: .trailing)
+                        .frame(width: width, height: fontSize, alignment: .trailing)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
