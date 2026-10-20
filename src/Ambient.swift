@@ -657,8 +657,11 @@ struct AmbientRow: View {
 
     var body: some View {
         Group { if settings.cards { card } else { plain } }
-            .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.white.opacity(hovered ? 0.07 : 0)).padding(-3))
+            // Inside the row's own height (rows can sit with no gap at all), a
+            // little wider than the text.
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Color.white.opacity(hovered ? 0.07 : 0))
+                .padding(.horizontal, -5).padding(.vertical, 0.5))
             .animation(.easeOut(duration: 0.12), value: hovered)
     }
 
