@@ -42,7 +42,10 @@ struct AmbientLine: Identifiable, Equatable {
     @Published var keySources: [String: String] = [:]
 
     var state: AmbientState
-    var rowFrames: [String: CGRect] = [:]
+    /// Each row's frame in the overlay. When rows move (one closed, one
+    /// arrived) the line under the pointer is worked out again straight away,
+    /// so the next × is live before the pointer moves.
+    var rowFrames: [String: CGRect] = [:] { didSet { hoverChanged?() } }
     var hubs: [String: HubClient] = [:]
     var geometryChanged: (() -> Void)?
     var shortcutsChanged: (() -> Void)?
@@ -261,8 +264,10 @@ struct AmbientLine: Identifiable, Equatable {
 
     /// Middle-click, the history window, or `pager ambient` over the socket.
     func dismiss(_ key: String) {
-        withAnimation(.easeOut(duration: 0.35)) { lines.removeAll { $0.id == key } }
-        if hovered == key { hovered = nil; hoverChanged?() }
+        // Quick, so the line below is in place for the next click. The panel
+        // keeps taking the mouse until the new row frames say what is under
+        // the pointer, so a fast second click never falls through.
+        withAnimation(.easeOut(duration: 0.1)) { lines.removeAll { $0.id == key } }
         setDismissed(key, Date(), propagate: true)
     }
 
@@ -547,7 +552,6 @@ struct AmbientOverlay: View {
             }
             if top, store.hovered != nil, store.lines.count > 1 { clearAll }
         }
-        .animation(.easeOut(duration: 0.15), value: store.hovered != nil)
         .background(AmbientShade(strength: s.shade, visible: !store.lines.isEmpty && !s.backdrop, corner: corner, blur: blur))
         // The panel reaches the screen edge; the stack sits 12 pt in from it as
         // before, with room on the open sides for the shade to fade out.
@@ -780,17 +784,25 @@ struct AmbientTail: View {
     @State private var onButton = false
 
     var body: some View {
-        let width = max(22, fontSize * 2)
-        ZStack(alignment: .trailing) {
+        // One fixed slot, whatever is in it: the age, an empty space, or the ×.
+        // The × is an overlay, so its chip never adds height or width, and
+        // nothing on the line moves when it appears.
+        let width = max(24, fontSize * 2.2)
+        Group {
             if showAge {
                 AmbientAge(since: since, fontSize: fontSize).opacity(hovered ? 0 : 1)
+            } else {
+                Text(" ").font(.system(size: max(9, fontSize - 2)))
             }
+        }
+        .frame(width: width, alignment: .trailing)
+        .overlay(alignment: .trailing) {
             if hovered {
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
                         .font(.system(size: max(8, fontSize - 3), weight: onButton ? .bold : .semibold))
                         .foregroundColor(.white.opacity(onButton ? 1 : 0.6))
-                        .frame(width: width, height: fontSize + 4)
+                        .frame(width: width, height: fontSize + 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .fill(Color.white.opacity(onButton ? 0.18 : 0))
@@ -804,7 +816,6 @@ struct AmbientTail: View {
                 .transition(.opacity)
             }
         }
-        .frame(minWidth: width, alignment: .trailing)
         .animation(.easeOut(duration: 0.12), value: hovered)
         .animation(.easeOut(duration: 0.12), value: onButton)
     }
@@ -1065,7 +1076,16 @@ final class AmbientPanel: NSPanel {
             if frame.insetBy(dx: -6, dy: -6).contains(local) { key = store.hovered }
         }
         if store.hovered != key { store.hovered = key }
-        let ignore = key == nil
+        // Over a row that was just closed, whose frame has not been replaced
+        // yet: keep the mouse a moment, so a quick next click is ours.
+        var settling = false
+        if key == nil, let panel {
+            let local = CGPoint(x: point.x - panel.frame.minX, y: panel.frame.maxY - point.y)
+            settling = store.rowFrames.contains { id, frame in
+                id != AmbientOverlay.clearKey && !store.lines.contains(where: { $0.id == id }) && frame.contains(local)
+            }
+        }
+        let ignore = key == nil && !settling
         if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
     }
 
