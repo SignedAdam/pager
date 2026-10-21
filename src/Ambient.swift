@@ -666,10 +666,10 @@ struct AmbientRow: View {
             .animation(.easeOut(duration: 0.12), value: hovered)
     }
 
-    /// The age, which turns into the close button while the line is pointed at.
+    /// The time left, which turns into the close button while the line is pointed at.
     private var tail: some View {
-        AmbientTail(since: line.event.happened ?? line.shownAt, fontSize: settings.fontSize,
-                    showAge: settings.ages, hovered: hovered, dismiss: dismiss)
+        AmbientTail(expires: line.expires, sticky: line.look.lifetime.isSticky, fontSize: settings.fontSize,
+                    showLeft: settings.ages, hovered: hovered, dismiss: dismiss)
     }
 
     private var message: some View {
@@ -777,32 +777,42 @@ struct AmbientClearAll: View {
     }
 }
 
-/// The end of a line: its age, or, while the line is pointed at, an × in the
-/// same place. Pointing at the × itself lifts it onto a soft lit chip.
+/// The end of a line: the time left before it leaves, or a pin for a sticky
+/// line, or, while the line is pointed at, an × in the same place. Pointing at
+/// the × itself makes it brighter.
 struct AmbientTail: View {
-    let since: Date
+    let expires: Date?
+    let sticky: Bool
     let fontSize: Double
-    let showAge: Bool
+    let showLeft: Bool
     let hovered: Bool
     let dismiss: () -> Void
     @State private var onButton = false
 
     var body: some View {
-        // One fixed slot, whatever is in it: the age, an empty space, or the ×.
-        // The × is an overlay, so its chip never adds height or width, and
-        // nothing on the line moves when it appears.
+        // One fixed slot, whatever is in it: the time left, a pin, an empty
+        // space, or the ×. Everything in it is an overlay on a blank of the
+        // text's size, so nothing on the line moves when it changes.
         let width = max(24, fontSize * 2.2)
-        Group {
-            if showAge {
-                AmbientAge(since: since, fontSize: fontSize).opacity(hovered ? 0 : 1)
-            } else {
-                Text(" ").font(.system(size: max(9, fontSize - 2)))
-            }
-        }
+        Text(" ").font(.system(size: max(9, fontSize - 2)).monospacedDigit())
         .frame(width: width, alignment: .trailing)
         .overlay(alignment: .trailing) {
+            if showLeft {
+                Group {
+                    if sticky {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: max(8, fontSize - 3)))
+                            .foregroundColor(.white.opacity(0.45))
+                    } else if let expires {
+                        AmbientLeft(expires: expires, fontSize: fontSize)
+                    }
+                }
+                .opacity(hovered ? 0 : 1)
+            }
+        }
+        .overlay(alignment: .trailing) {
             if hovered {
-                // Just the ×, right where the age ends. Pointing at it makes it
+                // Just the ×, right where the time left ends. Pointing at it makes it
                 // brighter and a touch larger, with a soft glow; no chip.
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
@@ -835,6 +845,22 @@ struct AmbientAge: View {
                 .foregroundColor(.white.opacity(0.45))
                 .lineLimit(1)
                 .frame(minWidth: max(18, fontSize * 1.8), alignment: .trailing)
+        }
+    }
+}
+
+/// The live countdown until a line leaves the screen.
+struct AmbientLeft: View {
+    let expires: Date
+    let fontSize: Double
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(AmbientTime.left(expires.timeIntervalSince(context.date)))
+                .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
+                .foregroundColor(.white.opacity(0.45))
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 }

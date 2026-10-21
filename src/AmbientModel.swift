@@ -69,6 +69,15 @@ enum AmbientTime {
         if s < 86_400 { return "\(s / 3600)h" }
         return "\(s / 86_400)d"
     }
+
+    /// Time until a line leaves the screen: `45s`, `9m`, `2h`. Rounded up, so
+    /// it never reads `0m` while time remains; nothing left is `0s`.
+    static func left(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "0s" }
+        if seconds < 60 { return "\(Int(seconds.rounded(.up)))s" }
+        if seconds < 3600 { return "\(Int((seconds / 60).rounded(.up)))m" }
+        return "\(Int((seconds / 3600).rounded(.up)))h"
+    }
 }
 
 // MARK: - presentation vocabulary

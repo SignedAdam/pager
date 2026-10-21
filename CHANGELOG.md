@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+The ambient overlay's right slot shows how long a line has left on screen
+(`45s`, `9m`, `2h`) instead of its age, and a pin for a sticky line. The event
+log and the menu bar panel still show ages.
+
 ## 1.1.1
 
 A panel with a video crashed as it opened: the video started playing while the

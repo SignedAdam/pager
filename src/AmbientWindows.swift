@@ -230,7 +230,7 @@ struct AmbientSettingsView: View {
                    0...100, step: 5, unit: "%")
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1).padding(.vertical, 2)
             AmbientSwitchRow(title: "Source icons", hint: "GitHub, Stripe\u{2026} marks", isOn: $store.settings.sourceIcons)
-            AmbientSwitchRow(title: "Ages", hint: "now, 4m, 2h", isOn: $store.settings.ages)
+            AmbientSwitchRow(title: "Time left", hint: "45s, 9m, or a pin", isOn: $store.settings.ages)
             AmbientSwitchRow(title: "Type icons", isOn: $store.settings.icons)
             AmbientSwitchRow(title: "Cards", isOn: $store.settings.cards)
             AmbientSwitchRow(title: "Details in cards", isOn: $store.settings.details, disabled: !store.settings.cards)

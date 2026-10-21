@@ -405,7 +405,7 @@ pager event --source deploy --text "**api** deployed in \`38s\`"
 pager event --source uptime --text "status page **down**" --severity error --lifetime sticky
 ```
 
-Each line is text only by default: the source in a left column, the message on the right, and its age (`now`, `12s`, `4m`, `3h`, `2d`). Lines go after 60 seconds unless the event, or your per-source settings, say otherwise. A `sticky` line stays until you middle-click it. The overlay never takes a click or keyboard focus; middle-click is read from a mouse monitor, and every other click goes through to whatever is underneath.
+Each line is text only by default: the source in a left column, the message on the right, and how long it has left on screen (`45s`, `9m`, `2h`), or a pin for a sticky line. Lines go after 60 seconds unless the event, or your per-source settings, say otherwise. A `sticky` line stays until you middle-click it. The overlay never takes a click or keyboard focus; middle-click is read from a mouse monitor, and every other click goes through to whatever is underneath.
 
 `pager event` needs no server. It hands the line to the running overlay over a Unix socket and appends it to `~/.pager/events.jsonl`. Its options are listed by `pager ambient --help`: `--detail`, `--subject`, `--type`, `--severity`, `--lifetime <n|sticky>`, `--layout split|inline`, `--effect blink|flash|highlight|wave|gradient`, `--target`, `--period`, `--color`, `--lines`, `--url`.
 

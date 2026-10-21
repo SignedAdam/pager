@@ -66,11 +66,16 @@ enum AmbientSnapshot {
         defer { try? FileManager.default.removeItem(atPath: AmbientPaths.directory) }
         let store = AmbientStore(settings: settings, state: AmbientState(), loadHistory: false)
         let now = Date()
+        let ages: [TimeInterval] = [2, 14, 75, 260, 700, 4000, 9000]
+        // Time left on screen for each line; nil is a sticky line with a pin.
+        let left: [TimeInterval?] = [45, nil, 600, 5400, nil, 30, nil]
         for (index, sample) in AmbientDemo.events().prefix(7).enumerated() {
             var event = sample
             event.id = "snap_\(index)"
-            event.receivedAt = now.addingTimeInterval(-Double([2, 14, 75, 260, 700, 4000, 9000][index]))
-            event.display = AmbientDisplay(lifetime: .sticky)
+            event.receivedAt = now.addingTimeInterval(-ages[index])
+            // A line's lifetime counts from when it arrived, so the age is added
+            // back: every countdown then shows its time left as listed.
+            event.display = AmbientDisplay(lifetime: left[index].map { .seconds(ages[index] + $0) } ?? .sticky)
             store.ingest(event, record: false)
         }
         store.lines.sort { $0.anchor > $1.anchor }

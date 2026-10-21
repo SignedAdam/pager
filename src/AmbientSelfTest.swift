@@ -65,6 +65,11 @@ enum AmbientSelfTest {
         for (seconds, want) in cases {
             expect(AmbientTime.age(seconds) == want, "age(\(seconds))", "got \(AmbientTime.age(seconds))")
         }
+        let left: [(TimeInterval, String)] = [(0, "0s"), (-3, "0s"), (45, "45s"), (59.2, "60s"), (61, "2m"),
+                                              (599, "10m"), (3600, "1h"), (3601, "2h")]
+        for (seconds, want) in left {
+            expect(AmbientTime.left(seconds) == want, "left(\(seconds))", "got \(AmbientTime.left(seconds))")
+        }
     }
 
     private static func lifetimes() {
