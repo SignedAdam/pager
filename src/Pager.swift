@@ -2647,7 +2647,7 @@ let EXAMPLES = """
 
 """
 
-let VERSION = "1.1.1"
+let VERSION = "1.1.2"
 
 // More than one source file means the entry point has to be named. Everything
 // below runs in the order it always did, top to bottom.

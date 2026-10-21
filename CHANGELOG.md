@@ -1,10 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.1.2
 
-The ambient overlay's right slot shows how long a line has left on screen
-(`45s`, `9m`, `2h`) instead of its age, and a pin for a sticky line. The event
-log and the menu bar panel still show ages.
+**Close a line with the pointer.** Point at a line and its time slot turns into
+an ×; a click there (or anywhere on the line) closes it and never reaches the
+app underneath. While the stream is pointed at, **Clear all** appears under the
+last line. The line you point at stays bright and the others step back. No
+permission needed, no layout shift, and quick enough to close several in a row.
+The menu bar panel also has Clear and a × per line on screen, and
+`pager ambient --dismiss newest|all` does it from a script. Optional keyboard
+shortcuts (⌃⌥⌫, ⌃⌥⇧⌫) are in Settings, off by default.
+
+**Time left, and pins.** The right slot shows how long a line has left on
+screen (`45s`, `9m`, `2h`) instead of its age, and a pin for a sticky line. The
+event log and the menu bar panel still show ages.
+
+**Nothing stays forever by accident.** Sticky lines leave the screen after 12
+hours by default (Settings → Stickies; 0 keeps them until dismissed) and stay
+open in the log. The expiry timer no longer stalls while a menu is open or when
+App Nap would have stretched it to minutes on an idle Mac.
+
+**Settings** has real margins and plain switch rows instead of pill toggles.
 
 ## 1.1.1
 
