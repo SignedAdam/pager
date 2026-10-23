@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 // MARK: - ambient: self test
 //
@@ -248,11 +248,51 @@ enum AmbientSelfTest {
         let rows = AmbientHistory.logRows()
         expect(rows.contains { $0["title"] == "one" && $0["event"] == "ambient" }, "log rows are plain text")
         expect(rows.contains { $0["id"] == "\u{00B7}5" && $0["connection"] == "work" }, "log row ids use the cursor")
+        archives()
+    }
+
+    /// Rotation keeps every file, and reading crosses them: newest first,
+    /// state lines from newer files applied, search reaching the oldest.
+    private static func archives() {
+        let files = FileManager.default
+        for file in AmbientHistory.files() { try? files.removeItem(atPath: file) }
+        func event(_ id: String, _ text: String) -> AmbientEvent {
+            var event = AmbientEvent(id: id, source: "s", text: text)
+            event.origin = "local"
+            return event
+        }
+        // What 1.1.2 and earlier left: one previous file.
+        try? (String(decoding: event("old", "from the legacy file").json, as: UTF8.self) + "\n")
+            .write(toFile: AmbientHistory.legacy, atomically: true, encoding: .utf8)
         let saved = AmbientHistory.rotateBytes
-        AmbientHistory.rotateBytes = 10
-        AmbientHistory.append(a)
+        AmbientHistory.rotateBytes = 1  // every write after the first starts a new file
+        AmbientHistory.append(event("e1", "the needle"))
+        for id in ["e2", "e3", "e4"] { AmbientHistory.append(event(id, "hay")) }
+        AmbientHistory.appendState(key: "local/e1", dismissedAt: Date())
+        AmbientHistory.appendState(key: "local/e2", dismissedAt: Date())
+        AmbientHistory.appendState(key: "local/e2", dismissedAt: nil)
+        AmbientHistory.append(event("e5", "hay"))
         AmbientHistory.rotateBytes = saved
-        expect(FileManager.default.fileExists(atPath: AmbientHistory.previous), "history rotates")
+        let kept = AmbientHistory.files().filter { files.fileExists(atPath: $0) }
+        expect(kept.count == 9 && kept.first == AmbientHistory.legacy && kept.last == AmbientHistory.path,
+               "rotation archives, never deletes", "\(kept.map { ($0 as NSString).lastPathComponent })")
+        let loaded = AmbientHistory.load()
+        expect(loaded.map(\.id) == ["old", "e1", "e2", "e3", "e4", "e5"], "every file loads, oldest first", "\(loaded.map(\.id))")
+        expect(loaded.first { $0.id == "e1" }?.dismissedAt != nil, "a state line in a newer file applies")
+        expect(loaded.first { $0.id == "e2" }?.dismissedAt == nil, "the latest state line wins")
+        let reader = AmbientHistory.Reader()
+        expect(reader.next(2).map(\.id) == ["e5", "e4"] && !reader.exhausted, "newest first, older files left unread")
+        expect(reader.next(10).map(\.id) == ["e3", "e2", "e1", "old"] && reader.exhausted, "the next page goes on")
+        var query = AmbientHistory.Query()
+        query.search = "NEEDLE"
+        let found = AmbientHistory.Reader(skipping: ["local/e5"]).next(10, where: query.matches)
+        expect(found.map(\.id) == ["e1"], "search reaches the archives", "\(found.map(\.id))")
+        query.search = "legacy"
+        expect(AmbientHistory.Reader().next(10, where: query.matches).map(\.id) == ["old"], "search reaches the legacy file")
+        query = AmbientHistory.Query()
+        query.hideDismissed = true
+        expect(AmbientHistory.Reader().next(10, where: query.matches).map(\.id) == ["e5", "e4", "e3", "e2", "old"],
+               "filters see dismissals from newer files")
     }
 
     private static func publish() {
@@ -314,5 +354,95 @@ enum AmbientSelfTest {
         expect(parsed?["Label"] as? String == Ambient.label, "plist label")
         expect((parsed?["ProgramArguments"] as? [String]) == ["/x/a&b/pager", "ambient"], "plist arguments escaped")
         expect(((parsed?["KeepAlive"] as? [String: Any])?["SuccessfulExit"] as? Bool) == false, "restarts only on crash")
+    }
+}
+
+// MARK: - ambient: idle check
+//
+// `pager ambient --idle-check` (and `make test`): the real app, every window
+// off screen, with its own state directory and no hubs. It counts layout
+// passes while nothing changes: with the log closed, with it open, and with
+// lines in the overlay. A label that redraws itself on its own timer shows up
+// here as passes that never stop, which is how the overlay once sat at 40% CPU.
+
+@MainActor enum AmbientIdleCheck {
+    static func isolate() {
+        setenv("PAGER_AMBIENT_DIR", NSTemporaryDirectory() + "pager-idle-check-\(getpid())", 1)
+        for name in [AmbientCredentials.urlVar, AmbientCredentials.readKeyVar, AmbientCredentials.hubVar] { unsetenv(name) }
+    }
+
+    static func run(_ app: AmbientApp) {
+        Task { @MainActor in
+            let ok = await check(app)
+            try? FileManager.default.removeItem(atPath: AmbientPaths.directory)
+            exit(ok ? 0 : 1)
+        }
+    }
+
+    private static func pause(_ seconds: Double) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    /// Events as they arrive, spaced out the way a busy stream is; with `age`, a backlog that old and older.
+    private static func arrive(_ store: AmbientStore, _ count: Int, age: TimeInterval = 0) async {
+        let sources = ["deploys", "github-acme", "stripe", "uptime"]
+        for index in 0..<count {
+            var event = AmbientEvent(id: AmbientEvent.localID(), source: sources[index % sources.count],
+                                     text: "**check** event \(index) of \(count)")
+            event.origin = "local"
+            event.receivedAt = age == 0 ? Date() : Date().addingTimeInterval(-age - Double(count - index) * 37)
+            store.ingest(event)
+            if age == 0 { await pause(0.05) }
+        }
+    }
+
+    private static func cpu() -> Double { Double(clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID)) / 1e9 }
+
+    /// Layout passes a second in the log and the overlay, and CPU, over `seconds` of nothing happening.
+    private static func measure(_ app: AmbientApp, _ seconds: Double) async -> (log: Double, overlay: Double, cpu: Double) {
+        func layouts() -> (Int, Int) {
+            ((app.historyWindow?.contentView as? AmbientLayoutCounting)?.layouts ?? 0,
+             (app.panel.contentView as? AmbientLayoutCounting)?.layouts ?? 0)
+        }
+        let (log, overlay) = layouts(), time = cpu(), start = Date()
+        await pause(seconds)
+        let elapsed = Date().timeIntervalSince(start), (log2, overlay2) = layouts()
+        return (Double(log2 - log) / elapsed, Double(overlay2 - overlay) / elapsed, (cpu() - time) / elapsed * 100)
+    }
+
+    private static func check(_ app: AmbientApp) async -> Bool {
+        let store = app.store
+        var ok = true
+        func report(_ name: String, _ m: (log: Double, overlay: Double, cpu: Double), log: Double, overlay: Double) {
+            let pass = m.log <= log && m.overlay <= overlay
+            ok = ok && pass
+            print(String(format: "  %@  %@  log %5.1f layouts/s  overlay %5.1f layouts/s  cpu %4.1f%%", pass ? "ok  " : "FAIL",
+                         name.padding(toLength: 10, withPad: " ", startingAt: 0), m.log, m.overlay, m.cpu))
+        }
+        // A log with a few hundred rows, none young enough to count seconds.
+        store.pause(until: nil)
+        await arrive(store, 300, age: 600)
+        app.showHistory()
+        await pause(0.5)
+        app.historyWindow?.close()
+
+        // Lines keep arriving while the log is closed: nothing should draw.
+        await arrive(store, 20)
+        await pause(1)
+        report("log closed", await measure(app, 2), log: 0.5, overlay: 0.5)
+
+        // The log open, with fresh events: their ages count seconds, one pass a second.
+        app.showHistory()
+        await arrive(store, 20)
+        await pause(1)
+        report("log open", await measure(app, 2), log: 2, overlay: 0.5)
+
+        // Lines on screen, counting down: one pass a second for the overlay alone.
+        app.historyWindow?.close()
+        store.resume()
+        await arrive(store, 6)
+        await pause(1)
+        report("overlay", await measure(app, 2), log: 0.5, overlay: 2)
+        return ok
     }
 }

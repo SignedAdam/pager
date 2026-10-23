@@ -26,6 +26,7 @@ enum Ambient {
       --install              run at login and restart on crash (LaunchAgent)
       --uninstall            remove the LaunchAgent
       --selftest             check the parts that need no screen
+      --idle-check           count redraws while idle, every window off screen
       --snapshot <png>       render the overlay over --on page|white|black|mixed|<image>
 
     pager ambient connect <url> --key <reader key> [--name N] [--sources a,b]
@@ -52,7 +53,8 @@ enum Ambient {
       --key <key>            publish key for --hub
 
     Files live in ~/.pager: ambient.json (settings), ambient-state.json,
-    events.jsonl (history), ambient.log. Protocol: docs/protocol.md
+    events.jsonl (history; older events in events-<date>.jsonl beside it,
+    never deleted), ambient.log. Protocol: docs/protocol.md
 
     """
 
@@ -66,6 +68,9 @@ enum Ambient {
         case "--help", "-h", "help": print(usage); return 0
         case "--status": return AmbientCommands.status()
         case "--selftest": return AmbientSelfTest.run()
+        case "--idle-check":
+            AmbientIdleCheck.isolate()
+            return run(.check)
         case "--snapshot": return AmbientSnapshot.run(Array(arguments.dropFirst()))
         case "--snapshot-ui": return AmbientSnapshot.ui(Array(arguments.dropFirst()))
         case "--install": return AmbientCommands.install()

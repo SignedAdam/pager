@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - ambient: settings and the event log
@@ -406,34 +407,144 @@ struct AmbientConnectionsView: View {
 
 // MARK: - the event log
 
-struct AmbientHistoryView: View {
-    @ObservedObject var store: AmbientStore
-    @State private var search = ""
-    @State private var source = ""
-    @State private var connection = ""
-    @State private var severity = 0
-    @State private var hideDismissed = false
-    @State private var expanded: String?
+/// One day's rows under its header.
+struct AmbientLogDay: Identifiable {
+    let day: Date
+    var events: [AmbientEvent]
+    var id: Date { day }
+}
 
-    private var filtered: [AmbientEvent] {
-        store.history.filter { event in
-            (source.isEmpty || event.source == source)
-                && (connection.isEmpty || (event.connection ?? "local") == connection)
-                && Severity.rank(event.severity) >= severity
-                && (!hideDismissed || event.dismissedAt == nil)
-                && (search.isEmpty || [event.label, event.source, event.subject ?? "", event.text, event.detail ?? "",
-                                       event.type ?? ""].joined(separator: " ").localizedCaseInsensitiveContains(search))
+/// The log's rows: the events in memory, then older ones from the history
+/// files a page at a time as the list nears its end. Search and filters cover
+/// every file, scanned off the main thread. The list is worked out once per
+/// change to the history or the filters, never while drawing.
+@MainActor final class AmbientLogModel: ObservableObject {
+    @Published var query = AmbientHistory.Query() {
+        didSet { if query != oldValue { restart(store.history) } }
+    }
+    @Published private(set) var days: [AmbientLogDay] = []
+    @Published private(set) var count = 0
+    /// Reading older files right now.
+    @Published private(set) var reading = false
+    /// Every file has been read; nothing older matches.
+    @Published private(set) var complete = false
+    @Published private(set) var hubs: [String] = []
+    @Published private(set) var sources: [String] = []
+
+    let store: AmbientStore
+    static let page = 200
+    /// Matches, newest first: from memory, then pages from the files.
+    private var rows: [AmbientEvent] = []
+    /// Every key the rows were drawn from, matching or not, so a page never repeats one.
+    private var known = Set<String>()
+    private var reader: AmbientHistory.Reader?
+    private var generation = 0
+    private var hubSet = Set<String>(), sourceSet = Set<String>()
+    private var watches: [AnyCancellable] = []
+    private let queue = DispatchQueue(label: "pager.ambient.log", qos: .userInitiated)
+
+    init(store: AmbientStore) {
+        self.store = store
+        restart(store.history)
+        // `$history` sends the new value before the store holds it.
+        watches.append(store.$history.dropFirst().sink { [weak self] in self?.merge($0) })
+        // Labels and colours come from settings; the toolbar icon from pause.
+        watches.append(store.$settings.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() })
+        watches.append(store.$paused.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() })
+    }
+
+    private func restart(_ history: [AmbientEvent]) {
+        reader?.cancel()
+        generation += 1
+        known = Set(history.map(\.key))
+        rows = history.filter(query.matches)
+        reader = AmbientHistory.Reader(skipping: known)
+        reading = false
+        complete = false
+        note(history)
+        publish()
+        if rows.count < Self.page { more() }
+    }
+
+    /// The store's history changed: an arrival, a dismissal, a replay. The
+    /// part in memory is filtered again; older rows stay, including ones the
+    /// store has since let go of.
+    private func merge(_ history: [AmbientEvent]) {
+        let inMemory = Set(history.map(\.key))
+        let older = rows.filter { !inMemory.contains($0.key) }
+        known.formUnion(inMemory)
+        rows = history.filter(query.matches) + older
+        note(history)
+        publish()
+    }
+
+    /// The next page of older matches. The list asks as its end comes into view.
+    func more() {
+        guard !reading, !complete, let reader else { return }
+        reading = true
+        let query = self.query, generation = self.generation, size = Self.page
+        queue.async {
+            let page = reader.next(size, where: query.matches)
+            let done = reader.exhausted
+            Task { @MainActor [weak self] in self?.add(page, done: done, generation: generation) }
         }
     }
 
-    private var days: [(day: Date, events: [AmbientEvent])] {
-        let calendar = Calendar.current
-        var out: [(day: Date, events: [AmbientEvent])] = []
-        for event in filtered {
-            let day = calendar.startOfDay(for: event.happened ?? Date())
-            if let last = out.last, last.day == day { out[out.count - 1].events.append(event) } else { out.append((day, [event])) }
+    private func add(_ page: [AmbientEvent], done: Bool, generation: Int) {
+        guard generation == self.generation else { return }
+        // Arrivals since the scan began are already on top.
+        let fresh = page.filter { known.insert($0.key).inserted }
+        rows += fresh
+        reading = false
+        complete = done
+        note(fresh)
+        publish()
+        if !done && fresh.isEmpty { more() }
+    }
+
+    /// Dismiss or bring back, then show it here: an event read from an older
+    /// file is not in the store's memory, so the store cannot update this row.
+    func setDismissed(_ event: AmbientEvent, _ date: Date?) {
+        if date == nil { store.undismiss(event.key, known: event) } else { store.dismiss(event.key, known: event) }
+        guard let index = rows.firstIndex(where: { $0.key == event.key }) else { return }
+        rows[index].dismissedAt = date
+        if !query.matches(rows[index]) { rows.remove(at: index) }
+        publish()
+    }
+
+    /// The hub and source choices only ever grow while the window is open.
+    private func note(_ events: [AmbientEvent]) {
+        let hubCount = hubSet.count, sourceCount = sourceSet.count
+        for event in events {
+            hubSet.insert(event.connection ?? "local")
+            sourceSet.insert(event.source)
         }
-        return out
+        if hubSet.count != hubCount { hubs = hubSet.sorted() }
+        if sourceSet.count != sourceCount { sources = sourceSet.sorted() }
+    }
+
+    private func publish() {
+        let calendar = Calendar.current
+        var out: [AmbientLogDay] = []
+        for event in rows {
+            let day = calendar.startOfDay(for: event.happened ?? Date())
+            if out.last?.day == day { out[out.count - 1].events.append(event) } else { out.append(AmbientLogDay(day: day, events: [event])) }
+        }
+        days = out
+        count = rows.count
+    }
+}
+
+struct AmbientHistoryView: View {
+    /// Not observed: the overlay changes the store many times a second. The
+    /// log model passes on what this view needs.
+    let store: AmbientStore
+    @StateObject private var log: AmbientLogModel
+    @State private var expanded: String?
+
+    init(store: AmbientStore) {
+        self.store = store
+        _log = StateObject(wrappedValue: AmbientLogModel(store: store))
     }
 
     private static let dayFormat: DateFormatter = {
@@ -455,14 +566,10 @@ struct AmbientHistoryView: View {
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    if filtered.isEmpty { empty }
-                    ForEach(days, id: \.day) { group in
+                    if log.count == 0 && log.complete { empty }
+                    ForEach(log.days) { group in
                         Section {
-                            ForEach(group.events, id: \.key) { event in
-                                AmbientHistoryRow(store: store, event: event, expanded: expanded == event.key) {
-                                    expanded = expanded == event.key ? nil : event.key
-                                }
-                            }
+                            ForEach(group.events, id: \.key) { event in row(event) }
                         } header: {
                             HStack {
                                 Text(dayTitle(group.day).uppercased()).font(.system(size: 9.5, weight: .semibold))
@@ -474,12 +581,19 @@ struct AmbientHistoryView: View {
                             .background(AmbientTheme.ink.opacity(0.96))
                         }
                     }
+                    if !log.complete {
+                        // Coming into view asks for the next page.
+                        Text(log.count == 0 ? "Searching older events\u{2026}" : "Older events\u{2026}")
+                            .font(.system(size: 11)).foregroundColor(AmbientTheme.faint)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .onAppear { log.more() }
+                    }
                 }
                 .padding(.bottom, 10)
             }
             Rectangle().fill(AmbientTheme.hairline).frame(height: 1)
             HStack {
-                Text("\(filtered.count) of \(store.history.count) events")
+                Text("\(log.count) event\(log.count == 1 ? "" : "s")" + (log.complete ? "" : ", more as you scroll"))
                 Spacer()
                 Text(AmbientPaths.history.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
             }
@@ -491,12 +605,24 @@ struct AmbientHistoryView: View {
         .environment(\.colorScheme, .dark)
     }
 
+    private func row(_ event: AmbientEvent) -> some View {
+        let key = event.key
+        return AmbientHistoryRow(event: event, label: store.label(for: event), look: AmbientRules.resolve(event, store.settings),
+                                 hub: store.connectionName(event.connection) ?? "this Mac", expanded: expanded == key,
+                                 clock: store.historyClock,
+                                 toggle: { expanded = expanded == key ? nil : key },
+                                 showAgain: { store.present(event, again: true) },
+                                 setDismissed: { log.setDismissed(event, $0) })
+            .equatable()
+    }
+
     private var empty: some View {
-        VStack(spacing: 6) {
+        let filtered = !log.query.isEmpty
+        return VStack(spacing: 6) {
             Image(nsImage: AmbientIcon.image(size: 28)).renderingMode(.template).foregroundColor(AmbientTheme.faint)
-            Text(store.history.isEmpty ? "Nothing yet" : "No matches")
+            Text(filtered ? "No matches" : "Nothing yet")
                 .font(.system(size: 13, weight: .medium)).foregroundColor(AmbientTheme.dim)
-            Text(store.history.isEmpty ? "Events from your hubs and `pager event` land here." : "Try fewer filters.")
+            Text(filtered ? "Try fewer filters." : "Events from your hubs and `pager event` land here.")
                 .font(.system(size: 11.5)).foregroundColor(AmbientTheme.faint)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 60)
@@ -509,17 +635,16 @@ struct AmbientHistoryView: View {
                     .foregroundColor(AmbientTheme.text)
                 Text("Event log").font(.system(size: 14, weight: .semibold)).foregroundColor(AmbientTheme.text)
                 Spacer()
-                AmbientField(placeholder: "Search", text: $search, icon: "magnifyingglass").frame(width: 220)
+                AmbientField(placeholder: "Search", text: $log.query.search, icon: "magnifyingglass").frame(width: 220)
             }
             HStack(spacing: 6) {
-                let hubs = Array(Set(store.history.map { $0.connection ?? "local" })).sorted()
-                AmbientChoice(options: [("", "All hubs")] + hubs.map { ($0, store.connectionName($0) ?? $0) },
-                              selection: $connection, icon: "point.3.connected.trianglepath.dotted")
-                AmbientChoice(options: [("", "All sources")] + Array(Set(store.history.map(\.source))).sorted().map { ($0, $0) },
-                              selection: $source, icon: "square.stack")
+                AmbientChoice(options: [("", "All hubs")] + log.hubs.map { ($0, store.connectionName($0) ?? $0) },
+                              selection: $log.query.connection, icon: "point.3.connected.trianglepath.dotted")
+                AmbientChoice(options: [("", "All sources")] + log.sources.map { ($0, $0) },
+                              selection: $log.query.source, icon: "square.stack")
                 AmbientChoice(options: Severity.allCases.map { ($0.rank, $0 == .debug ? "Any level" : "\($0.rawValue.capitalized) and up") },
-                              selection: $severity, icon: "exclamationmark.triangle")
-                Toggle("Hide dismissed", isOn: $hideDismissed).toggleStyle(.checkbox).controlSize(.small)
+                              selection: $log.query.severity, icon: "exclamationmark.triangle")
+                Toggle("Hide dismissed", isOn: $log.query.hideDismissed).toggleStyle(.checkbox).controlSize(.small)
                     .font(.system(size: 11.5)).foregroundColor(AmbientTheme.dim)
                 Spacer()
             }
@@ -527,14 +652,27 @@ struct AmbientHistoryView: View {
     }
 }
 
-struct AmbientHistoryRow: View {
-    @ObservedObject var store: AmbientStore
+/// Plain values in, actions out, so a new event redraws only the rows whose
+/// content changed. Equal when everything shown is equal; the actions only
+/// ever do the same thing to the same event.
+struct AmbientHistoryRow: View, Equatable {
     let event: AmbientEvent
+    let label: String
+    let look: ResolvedPresentation
+    /// The hub's name, or "this Mac".
+    let hub: String
     let expanded: Bool
+    let clock: AmbientClock
     let toggle: () -> Void
+    let showAgain: () -> Void
+    let setDismissed: (Date?) -> Void
     @State private var hover = false
 
-    private static let clock: DateFormatter = {
+    static func == (a: Self, b: Self) -> Bool {
+        a.event == b.event && a.label == b.label && a.look == b.look && a.hub == b.hub && a.expanded == b.expanded
+    }
+
+    private static let clockFormat: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         return f
@@ -561,17 +699,16 @@ struct AmbientHistoryRow: View {
     }
 
     var body: some View {
-        let look = AmbientRules.resolve(event, store.settings)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text(event.happened.map { Self.clock.string(from: $0) } ?? "")
+                Text(event.happened.map { Self.clockFormat.string(from: $0) } ?? "")
                     .font(AmbientTheme.mono(10.5)).foregroundColor(AmbientTheme.faint).frame(width: 36, alignment: .leading)
                 AmbientLevelTag(severity: event.severity)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     if let brand = look.brand {
                         AmbientMark(brand: brand, color: Color(hex: look.sourceColor) ?? AmbientTheme.dim, size: 12)
                     }
-                    Text(store.label(for: event)).font(.system(size: 12)).foregroundColor(AmbientTheme.dim).lineLimit(1)
+                    Text(label).font(.system(size: 12)).foregroundColor(AmbientTheme.dim).lineLimit(1)
                 }
                 .frame(width: 118, alignment: .leading)
                 StyledMessage(text: event.text, context: event.subject.map { $0 + "  " } ?? "",
@@ -585,23 +722,23 @@ struct AmbientHistoryRow: View {
                             Image(systemName: "pin.fill").font(.system(size: 9)).foregroundColor(AmbientTheme.lime.opacity(0.8))
                         }
                         if link != nil { Image(systemName: "link").font(.system(size: 9)).foregroundColor(AmbientTheme.faint) }
-                        if let at = event.happened { AmbientAge(since: at, fontSize: 12.5) }
+                        if let at = event.happened { AmbientAge(clock: clock, since: at, fontSize: 12.5) }
                     }
                     .opacity(hover ? 0 : 1)
                     HStack(spacing: 4) {
                         if let link { action("arrow.up.right", link.absoluteString) { NSWorkspace.shared.open(link) } }
-                        action("arrow.clockwise", "Show again") { store.present(event, again: true) }
+                        action("arrow.clockwise", "Show again", showAgain)
                         if event.dismissedAt == nil {
-                            action("xmark", "Dismiss") { store.dismiss(event.key) }
+                            action("xmark", "Dismiss") { setDismissed(Date()) }
                         } else {
-                            action("arrow.uturn.backward", "Undismiss") { store.undismiss(event.key) }
+                            action("arrow.uturn.backward", "Undismiss") { setDismissed(nil) }
                         }
                     }
                     .opacity(hover ? 1 : 0)
                 }
                 .frame(width: 84, alignment: .trailing)
             }
-            if expanded { details(look) }
+            if expanded { details }
         }
         .padding(.horizontal, 16).padding(.vertical, expanded ? 3 : 0)
         .background(hover || expanded ? AmbientTheme.raised : Color.clear)
@@ -610,13 +747,13 @@ struct AmbientHistoryRow: View {
         .onTapGesture(perform: toggle)
     }
 
-    private func details(_ look: ResolvedPresentation) -> some View {
+    private var details: some View {
         let facts: [(String, String)] = [
             ("when", event.happened.map { Self.full.string(from: $0) } ?? "-"),
             ("type", event.type ?? "-"),
             ("level", event.severity ?? "info"),
             ("stays", look.lifetime.isSticky ? "until dismissed" : "\(look.lifetime.label) s"),
-            ("hub", store.connectionName(event.connection) ?? "this Mac"),
+            ("hub", hub),
             ("id", event.id),
         ] + (event.url.map { [("url", $0)] } ?? [])
             + (event.dismissedAt.map { [("dismissed", Self.full.string(from: $0))] } ?? [])

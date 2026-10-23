@@ -19,7 +19,7 @@ Running it needs nothing.
 
 ```bash
 make check    # syntax checks every script and typechecks the Swift
-make test     # drives all ten tour steps through a stub, no windows open
+make test     # drives all ten tour steps through a stub, checks the ambient app idles; nothing on screen
 ```
 
 Both run in CI on every push. If you changed anything about how a panel looks,
@@ -60,7 +60,7 @@ the two words `ambient` and `event` at the entry point:
 | `AmbientEffects.swift` | styled text, and the macOS 15 TextRenderer effects |
 | `AmbientWindows.swift` | the settings and history windows |
 | `AmbientCommands.swift` | `pager ambient ...` and `pager event` |
-| `AmbientSelfTest.swift` | `pager ambient --selftest`, run by `make check` |
+| `AmbientSelfTest.swift` | `pager ambient --selftest`, run by `make check`; `--idle-check`, run by `make test` |
 
 The wire format is [docs/protocol.md](docs/protocol.md). If you change what the
 client sends or expects, change the protocol doc and `tools/mock-hub.py` with

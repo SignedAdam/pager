@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**Idle means idle.** Every age and time-left label had its own once-a-second
+timer, and each one made its window lay itself out again. With a few dozen rows
+the event log redrew well over a hundred times a second, even after it was
+closed, and a running overlay could sit at 40% CPU. Now one clock per window
+drives the labels: every second while one shows seconds, every minute
+otherwise. The log's clock stops while the log is closed or minimized, and the
+overlay's while it has no lines. A new event no longer redraws every row of the
+log. `make test` checks this with the real app, off screen.
+
+**History is kept forever.** Past 4 MB, `events.jsonl` moves to a dated file
+beside it (`events-20261023-101500.jsonl`) instead of replacing the one
+before, which was deleted. Startup still reads only the newest 2000 events. The
+log shows the newest first and loads older ones as you scroll; its search and
+filters cover every file, including the `events.jsonl.1` older versions kept.
+
 ## 1.1.2
 
 **Close a line with the pointer.** Point at a line and its time slot turns into

@@ -114,7 +114,8 @@ hub-test: $(BIN) ## test the reference hub, then drive the ambient client agains
 readme: ## check the README against the actual program
 	@python3 tools/validate-readme.py
 
-test: check readme ## drive the whole tour with a stub, no windows opened
+test: check readme ## drive the whole tour with a stub, and check the ambient app idles; nothing on screen
+	@$(BIN) ambient --idle-check
 	@tmp=$$(mktemp -d); \
 	printf '#!/bin/bash\necho "$$@" >> $$STUBLOG\necho "---" >> $$STUBLOG\necho "$$STUBANSWER"\n' > $$tmp/stub; \
 	chmod +x $$tmp/stub; \

@@ -438,7 +438,7 @@ Sources get their mark and colour: a source named `github`, `github-acme` or "Gi
 
 ### Settings, history, running at login
 
-The menu bar icon pauses the stream for 15 minutes, an hour or until tomorrow morning, opens the event log and settings, and quits. `pager ambient --pause 1h` does the same from a script. Middle-click on a line needs Accessibility (the menu asks once); without it the line still goes, but the click also reaches the app underneath. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is searchable and filters by hub, source and severity; `pager log --window` lists ambient events too.
+The menu bar icon pauses the stream for 15 minutes, an hour or until tomorrow morning, opens the event log and settings, and quits. `pager ambient --pause 1h` does the same from a script. Middle-click on a line needs Accessibility (the menu asks once); without it the line still goes, but the click also reaches the app underneath. Settings is a small window for width, spacing, text size, lifetime, corner and screen, effects, per-source lifetime, colour and mute, and the hub connections. It saves to `~/.pager/ambient.json`. History is kept forever: past 4 MB, `events.jsonl` moves to a dated file beside it and a new one starts. The log shows the newest events, loads older ones as you scroll, and its search and filters (hub, source, severity) cover every file; `pager log --window` lists ambient events too.
 
 ```sh
 pager ambient --status      # running, each hub's connection and cursor, the last event
@@ -466,7 +466,7 @@ make             # list available targets
 make build       # compile bin/pager
 make check       # check Swift and shell syntax, run the ambient selftest
 make hub-test    # test hub/, then drive the ambient overlay against tools/mock-hub.py
-make test        # exercise the walkthrough with a stub pager
+make test        # exercise the walkthrough with a stub pager, check the ambient app idles off screen
 make demo        # display a panel with representative content
 make shots       # regenerate docs screenshots
 make tarball     # build a self-contained archive

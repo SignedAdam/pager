@@ -29,17 +29,34 @@ struct AmbientLine: Identifiable, Equatable {
 }
 
 @MainActor final class AmbientStore: ObservableObject {
-    @Published var lines: [AmbientLine] = []
+    @Published var lines: [AmbientLine] = [] {
+        didSet { overlayClock.run(settings.ages && !lines.isEmpty) }
+    }
     @Published var settings: AmbientSettings {
         didSet { if settings != oldValue { settingsChanged(from: oldValue) } }
     }
-    @Published var history: [AmbientEvent] = []
+    @Published var history: [AmbientEvent] = [] {
+        didSet { historyClock.refresh() }
+    }
     @Published var paused = false
     /// When a timed pause ends. Nil with `paused` set means until resumed.
     @Published var pausedUntil: Date?
     /// Per connection id: `connected`, `reconnecting in 4s`, `no reader key`…
     @Published var phases: [String: String] = [:]
     @Published var keySources: [String: String] = [:]
+
+    /// The time left on the overlay's lines, ticking only while there are lines.
+    /// A line shows seconds in its last minute; under two, so the switch to
+    /// seconds never waits out a one-minute tick.
+    lazy var overlayClock = AmbientClock { [weak self] now in
+        self?.lines.contains {
+            !$0.look.lifetime.isSticky && ($0.expires.map { $0.timeIntervalSince(now) < 120 } ?? false)
+        } ?? false
+    }
+    /// Ages in the event log and the menu bar panel. The app runs it while one of them is open.
+    lazy var historyClock = AmbientClock { [weak self] now in
+        self?.history.prefix(50).contains { $0.happened.map { now.timeIntervalSince($0) < 60 } ?? false } ?? false
+    }
 
     var state: AmbientState
     /// Each row's frame in the overlay. When rows move (one closed, one
@@ -67,7 +84,7 @@ struct AmbientLine: Identifiable, Equatable {
          loadHistory: Bool = true) {
         self.settings = settings
         self.state = state
-        history = loadHistory ? Array(AmbientHistory.load(limit: historyLimit).reversed()) : []
+        history = loadHistory ? AmbientHistory.Reader().next(historyLimit) : []
         seen = Set(history.map(\.key))
         if let until = state.pausedUntil, until > Date() {
             paused = true
@@ -263,19 +280,20 @@ struct AmbientLine: Identifiable, Equatable {
     }
 
     /// Middle-click, the history window, or `pager ambient` over the socket.
-    func dismiss(_ key: String) {
+    /// `known` is the event itself, for one the log read from an older file.
+    func dismiss(_ key: String, known: AmbientEvent? = nil) {
         // Quick, so the line below is in place for the next click. The panel
         // keeps taking the mouse until the new row frames say what is under
         // the pointer, so a fast second click never falls through.
         withAnimation(.easeOut(duration: 0.1)) { lines.removeAll { $0.id == key } }
-        setDismissed(key, Date(), propagate: true)
+        setDismissed(key, Date(), propagate: true, known: known)
     }
 
     /// Local bookkeeping for a dismissal from anywhere, and the call to the
     /// hub when it started here. Dismissal on a hub is per reader: it hides
     /// the line for this key's owner, not for anyone else reading that hub.
-    func setDismissed(_ key: String, _ date: Date?, propagate: Bool) {
-        let event = event(forKey: key)
+    func setDismissed(_ key: String, _ date: Date?, propagate: Bool, known: AmbientEvent? = nil) {
+        let event = event(forKey: key) ?? known
         if let index = history.firstIndex(where: { $0.key == key }) {
             if (history[index].dismissedAt == nil) == (date == nil) && !propagate { return }
             history[index].dismissedAt = date
@@ -291,9 +309,9 @@ struct AmbientLine: Identifiable, Equatable {
         }
     }
 
-    func undismiss(_ key: String) {
-        setDismissed(key, nil, propagate: true)
-        if var event = event(forKey: key) {
+    func undismiss(_ key: String, known: AmbientEvent? = nil) {
+        setDismissed(key, nil, propagate: true, known: known)
+        if var event = event(forKey: key) ?? known {
             event.dismissedAt = nil
             if AmbientRules.resolve(event, settings).lifetime.isSticky {
                 if event.origin == "local" && !state.stickies.contains(where: { $0.key == key }) {
@@ -460,6 +478,7 @@ struct AmbientLine: Identifiable, Equatable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
         geometryChanged?()
         if old.shortcuts != settings.shortcuts { shortcutsChanged?() }
+        if old.ages != settings.ages { overlayClock.run(settings.ages && !lines.isEmpty) }
         if old.connections != settings.connections { startHubs() }
     }
 
@@ -535,7 +554,7 @@ struct AmbientOverlay: View {
         VStack(alignment: right ? .trailing : .leading, spacing: s.rowGap) {
             if !top, store.hovered != nil, store.lines.count > 1 { clearAll }
             ForEach(ordered) { line in
-                AmbientRow(line: line, settings: s, right: right, hovered: store.hovered == line.id,
+                AmbientRow(line: line, settings: s, clock: store.overlayClock, right: right, hovered: store.hovered == line.id,
                            dimmed: store.hovered != nil && store.hovered != line.id) {
                     store.dismiss(line.id)
                 }
@@ -642,6 +661,7 @@ struct AmbientHalo: ViewModifier {
 struct AmbientRow: View {
     let line: AmbientLine
     let settings: AmbientSettings
+    let clock: AmbientClock
     var right = true
     var hovered = false
     /// Another line of the stream is pointed at.
@@ -669,7 +689,7 @@ struct AmbientRow: View {
     /// The time left, which turns into the close button while the line is pointed at.
     private var tail: some View {
         AmbientTail(expires: line.expires, sticky: line.look.lifetime.isSticky, fontSize: settings.fontSize,
-                    showLeft: settings.ages, hovered: hovered, dismiss: dismiss)
+                    showLeft: settings.ages, hovered: hovered, clock: clock, dismiss: dismiss)
     }
 
     private var message: some View {
@@ -752,7 +772,6 @@ struct AmbientRow: View {
     }
 }
 
-/// `now`, `12s`, `4m`, `3h`, `2d`, ticking once a second on its own.
 struct AmbientClearAll: View {
     let fontSize: Double
     let action: () -> Void
@@ -786,6 +805,7 @@ struct AmbientTail: View {
     let fontSize: Double
     let showLeft: Bool
     let hovered: Bool
+    let clock: AmbientClock
     let dismiss: () -> Void
     @State private var onButton = false
 
@@ -804,7 +824,7 @@ struct AmbientTail: View {
                             .font(.system(size: max(8, fontSize - 3)))
                             .foregroundColor(.white.opacity(0.45))
                     } else if let expires {
-                        AmbientLeft(expires: expires, fontSize: fontSize)
+                        AmbientLeft(clock: clock, expires: expires, fontSize: fontSize)
                     }
                 }
                 .opacity(hovered ? 0 : 1)
@@ -834,34 +854,68 @@ struct AmbientTail: View {
     }
 }
 
+/// One timer for every age or time-left label in a window. Only the labels
+/// observe it, so a tick redraws a few words and nothing else. A timer per
+/// row, which this replaced, kept the log laying itself out a hundred times a
+/// second, closed or not.
+@MainActor final class AmbientClock: ObservableObject {
+    @Published private(set) var now = Date()
+    private var timer: Timer?
+    private var running = false
+    /// Whether a label shows seconds, or will before a minute is up.
+    private let needsSeconds: (Date) -> Bool
+
+    init(needsSeconds: @escaping (Date) -> Bool) { self.needsSeconds = needsSeconds }
+
+    /// On while something shows the time. Off, there is no timer at all.
+    func run(_ on: Bool) {
+        running = on
+        if on { refresh() } else { timer?.invalidate(); timer = nil }
+    }
+
+    /// The time now, and when to tick next: on start, and whenever what is shown changes.
+    func refresh() {
+        guard running else { return }
+        now = Date()
+        timer?.invalidate()
+        let interval: TimeInterval = needsSeconds(now) ? 1 : 60
+        let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        timer.tolerance = interval / 10
+        // Common modes, so the labels keep time while a menu is open.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+}
+
+/// `now`, `12s`, `4m`, `3h`, `2d`.
 struct AmbientAge: View {
+    @ObservedObject var clock: AmbientClock
     let since: Date
     let fontSize: Double
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(AmbientTime.age(context.date.timeIntervalSince(since)))
-                .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
-                .foregroundColor(.white.opacity(0.45))
-                .lineLimit(1)
-                .frame(minWidth: max(18, fontSize * 1.8), alignment: .trailing)
-        }
+        Text(AmbientTime.age(clock.now.timeIntervalSince(since)))
+            .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
+            .foregroundColor(.white.opacity(0.45))
+            .lineLimit(1)
+            .frame(minWidth: max(18, fontSize * 1.8), alignment: .trailing)
     }
 }
 
-/// The live countdown until a line leaves the screen.
+/// The countdown until a line leaves the screen.
 struct AmbientLeft: View {
+    @ObservedObject var clock: AmbientClock
     let expires: Date
     let fontSize: Double
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(AmbientTime.left(expires.timeIntervalSince(context.date)))
-                .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
-                .foregroundColor(.white.opacity(0.45))
-                .lineLimit(1)
-                .fixedSize()
-        }
+        Text(AmbientTime.left(expires.timeIntervalSince(clock.now)))
+            .font(.system(size: max(9, fontSize - 2)).monospacedDigit())
+            .foregroundColor(.white.opacity(0.45))
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
@@ -875,9 +929,21 @@ final class AmbientMenuPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onClose() }
 }
 
+/// Counts layout passes, so `--idle-check` can see a window that keeps
+/// redrawing while nothing on it changes.
+protocol AmbientLayoutCounting { var layouts: Int { get } }
+
+class AmbientCountingHostingView<Content: View>: NSHostingView<Content>, AmbientLayoutCounting {
+    private(set) var layouts = 0
+    override func layout() {
+        layouts += 1
+        super.layout()
+    }
+}
+
 /// The first click on a line's close button counts, even though the overlay
 /// never becomes the key window.
-final class AmbientHostingView<Content: View>: NSHostingView<Content> {
+final class AmbientHostingView<Content: View>: AmbientCountingHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -887,15 +953,17 @@ final class AmbientPanel: NSPanel {
 }
 
 @MainActor final class AmbientApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    enum Mode { case daemon, demo(count: Int, interval: TimeInterval) }
+    /// `check` is `--idle-check`: every window off screen, no menu bar item,
+    /// no socket, no hubs, nothing that reaches the screen or the keyboard.
+    enum Mode { case daemon, demo(count: Int, interval: TimeInterval), check }
 
     let store: AmbientStore
     let mode: Mode
-    private var panel: AmbientPanel!
+    private(set) var panel: AmbientPanel!
     private var statusItem: NSStatusItem?
     private var server: AmbientSocket.Server?
     private var settingsWindow: NSWindow?
-    private var historyWindow: NSWindow?
+    private(set) var historyWindow: NSWindow?
     private var monitors: [Any] = []
     private var signals: [DispatchSourceSignal] = []
     private var middleClickTap: CFMachPort?
@@ -928,8 +996,10 @@ final class AmbientPanel: NSPanel {
         panel.orderFrontRegardless()
         NotificationCenter.default.addObserver(self, selector: #selector(positionOverlay),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        watchMiddleClicks()
-        watchHover()
+        if !offscreen {
+            watchMiddleClicks()
+            watchHover()
+        }
         handleSignals()
 
         switch mode {
@@ -946,7 +1016,14 @@ final class AmbientPanel: NSPanel {
         case .demo(let count, let interval):
             store.demoFinished = { NSApp.terminate(nil) }
             store.playDemo(count: count, interval: interval)
+        case .check:
+            AmbientIdleCheck.run(self)
         }
+    }
+
+    private var offscreen: Bool {
+        if case .check = mode { return true }
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -968,7 +1045,8 @@ final class AmbientPanel: NSPanel {
         let frame = screen.visibleFrame
         let width = min(store.settings.width + 12 + AmbientShadeGeometry.margin, frame.width)
         let x = store.settings.corner.hasSuffix("left") ? frame.minX : frame.maxX - width
-        panel.setFrame(NSRect(x: x, y: frame.minY, width: width, height: frame.height), display: true)
+        let origin = offscreen ? NSPoint(x: -20_000, y: -20_000) : NSPoint(x: x, y: frame.minY)
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: frame.height)), display: true)
     }
 
     // MARK: middle click
@@ -1297,6 +1375,7 @@ final class AmbientPanel: NSPanel {
         panel.orderFrontRegardless()
         panel.makeKey()
         menuPanel = panel
+        updateHistoryClock()
         statusItem?.button?.highlight(true)
         let close: (NSEvent) -> Void = { [weak self] _ in Task { @MainActor in self?.closePanel() } }
         if let outside = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: close) {
@@ -1317,6 +1396,7 @@ final class AmbientPanel: NSPanel {
     private func closePanel() {
         menuPanel?.orderOut(nil)
         menuPanel = nil
+        updateHistoryClock()
         statusItem?.button?.highlight(false)
         for monitor in panelMonitors { NSEvent.removeMonitor(monitor) }
         panelMonitors = []
@@ -1333,15 +1413,35 @@ final class AmbientPanel: NSPanel {
 
     @objc func showHistory() {
         if historyWindow == nil {
-            historyWindow = window(title: "Ambient event log", size: NSSize(width: 760, height: 620),
-                                   view: AmbientHistoryView(store: store))
+            let log = window(title: "Ambient event log", size: NSSize(width: 760, height: 620),
+                             view: AmbientHistoryView(store: store))
+            for name in [NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification,
+                         NSWindow.didDeminiaturizeNotification] {
+                NotificationCenter.default.addObserver(self, selector: #selector(historyWindowChanged),
+                                                       name: name, object: log)
+            }
+            historyWindow = log
         }
+        logOpen = true
+        updateHistoryClock()
         bringForward(historyWindow)
     }
 
+    /// The window is kept when closed, so its ages stop here rather than by going away.
+    private var logOpen = false
+
+    @objc private func historyWindowChanged(_ note: Notification) {
+        logOpen = note.name == NSWindow.didDeminiaturizeNotification
+        updateHistoryClock()
+    }
+
+    private func updateHistoryClock() { store.historyClock.run(logOpen || menuPanel != nil) }
+
     private func window<V: View>(title: String, size: NSSize, view: V) -> NSWindow {
+        // Borderless off screen: AppKit never pulls a window without a title bar back onto a screen.
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              styleMask: offscreen ? [.borderless]
+                                  : [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = title
         window.titleVisibility = .hidden
@@ -1350,12 +1450,13 @@ final class AmbientPanel: NSPanel {
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = AmbientTheme.nsInk
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: view)
-        window.center()
+        window.contentView = AmbientCountingHostingView(rootView: view)
+        if offscreen { window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000)) } else { window.center() }
         return window
     }
 
     private func bringForward(_ window: NSWindow?) {
+        if offscreen { window?.orderFrontRegardless(); return }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }

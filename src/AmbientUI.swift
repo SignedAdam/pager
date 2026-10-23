@@ -191,7 +191,7 @@ struct AmbientEventRow: View {
         let look = AmbientRules.resolve(event, store.settings)
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             if let at = event.happened {
-                AmbientAge(since: at, fontSize: 12).frame(width: 24, alignment: .leading)
+                AmbientAge(clock: store.historyClock, since: at, fontSize: 12).frame(width: 24, alignment: .leading)
             }
             AmbientLevelTag(severity: event.severity)
             HStack(alignment: .firstTextBaseline, spacing: 4) {

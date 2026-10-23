@@ -759,12 +759,26 @@ struct SSEParser {
 // MARK: - durable history
 
 /// `~/.pager/events.jsonl`: every ambient event, local and from hubs, one per
-/// line, plus small `state` lines when one is dismissed or brought back. Rolls
-/// to `.1` past four megabytes, like the panel log.
+/// line, plus small `state` lines when one is dismissed or brought back. Past
+/// four megabytes the file is renamed to a dated archive beside it
+/// (`events-20261023-101500.jsonl`, UTC) and a new one starts. Nothing is ever
+/// deleted; `events.jsonl.1`, which 1.1.2 and earlier kept, is the oldest file.
 enum AmbientHistory {
     static var path: String { AmbientPaths.history }
-    static var previous: String { path + ".1" }
+    static var legacy: String { path + ".1" }
     static var rotateBytes = 4 * 1024 * 1024
+
+    /// Every history file, oldest first. Some may not exist.
+    static func files() -> [String] {
+        let directory = AmbientPaths.directory
+        let archives = ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .filter { $0.hasPrefix("events-") && $0.hasSuffix(".jsonl") }
+            // Without the extension, so `…-101500` sorts before `…-101500-2`.
+            .map { String($0.dropLast(".jsonl".count)) }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map { directory + "/" + $0 + ".jsonl" }
+        return [legacy] + archives + [path]
+    }
 
     static func append(_ event: AmbientEvent) {
         var event = event
@@ -792,33 +806,100 @@ enum AmbientHistory {
         _ = line.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
 
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f
+    }()
+
     private static func rotate() {
         guard let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int,
               size > rotateBytes else { return }
-        try? FileManager.default.removeItem(atPath: previous)
-        try? FileManager.default.moveItem(atPath: path, toPath: previous)
+        let base = AmbientPaths.directory + "/events-" + stamp.string(from: Date())
+        var target = base + ".jsonl", next = 2
+        while FileManager.default.fileExists(atPath: target) { target = base + "-\(next).jsonl"; next += 1 }
+        // A move never replaces a file, so two writers rotating at once lose nothing.
+        try? FileManager.default.moveItem(atPath: path, toPath: target)
     }
 
-    /// Oldest first, one entry per id, dismissals applied.
+    /// The newest `limit` events, oldest first, dismissals applied.
     static func load(limit: Int = 5000) -> [AmbientEvent] {
-        var order: [String] = []
-        var events: [String: AmbientEvent] = [:]
-        for file in [previous, path] {
-            guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
-            for line in text.split(separator: "\n") {
+        Array(Reader().next(limit).reversed())
+    }
+
+    /// Reads history newest first, a page at a time, and opens an older file
+    /// only once the newer ones are used up. One entry per key, from its
+    /// latest line, with the state lines written after it applied. A state
+    /// line is always newer than its event, so reading backwards sees it first.
+    /// Used by one thread at a time; only `cancel` comes from another, under the lock.
+    final class Reader: @unchecked Sendable {
+        private var files: [String]
+        private var lines: [Substring] = []
+        private var index = -1
+        private var seen: Set<String>
+        private var states: [String: Date?] = [:]
+        private let lock = NSLock()
+        private var stopped = false
+        private(set) var exhausted = false
+
+        /// `skipping`: keys the caller already has.
+        init(skipping keys: Set<String> = []) {
+            files = AmbientHistory.files()
+            seen = keys
+        }
+
+        /// Ends a scan running on another thread early; it returns what it has.
+        func cancel() { lock.lock(); stopped = true; lock.unlock() }
+
+        private var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+
+        /// Up to `limit` more events that pass `include`, newest first.
+        func next(_ limit: Int, where include: (AmbientEvent) -> Bool = { _ in true }) -> [AmbientEvent] {
+            var out: [AmbientEvent] = []
+            while out.count < limit, !cancelled {
+                guard index >= 0 else {
+                    guard let file = files.popLast() else { exhausted = true; break }
+                    lines = (try? String(contentsOfFile: file, encoding: .utf8))?.split(separator: "\n") ?? []
+                    index = lines.count - 1
+                    continue
+                }
+                let line = lines[index]
+                index -= 1
                 let data = Data(line.utf8)
                 if line.contains("\"kind\":\"state\"") {
                     guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let key = object["key"] as? String else { continue }
-                    events[key]?.dismissedAt = (object["dismissed_at"] as? String).flatMap(AmbientTime.parse)
+                          let key = object["key"] as? String, states.index(forKey: key) == nil else { continue }
+                    states.updateValue((object["dismissed_at"] as? String).flatMap(AmbientTime.parse), forKey: key)
                     continue
                 }
-                guard let event = AmbientEvent.decode(data) else { continue }
-                if events[event.key] == nil { order.append(event.key) }
-                events[event.key] = event
+                guard var event = AmbientEvent.decode(data), seen.insert(event.key).inserted else { continue }
+                if let state = states[event.key] { event.dismissedAt = state }
+                if include(event) { out.append(event) }
             }
+            return out
         }
-        return order.suffix(limit).compactMap { events[$0] }
+    }
+
+    /// What the event log is narrowed to. One test, for the events in memory and the file scan alike.
+    struct Query: Equatable {
+        var search = ""
+        var source = ""
+        var connection = ""
+        var severity = 0
+        var hideDismissed = false
+
+        var isEmpty: Bool { self == Query() }
+
+        func matches(_ event: AmbientEvent) -> Bool {
+            (source.isEmpty || event.source == source)
+                && (connection.isEmpty || (event.connection ?? "local") == connection)
+                && Severity.rank(event.severity) >= severity
+                && (!hideDismissed || event.dismissedAt == nil)
+                && (search.isEmpty || [event.label, event.source, event.subject ?? "", event.text, event.detail ?? "",
+                                       event.type ?? ""].joined(separator: " ").localizedCaseInsensitiveContains(search))
+        }
     }
 
     /// The same history shaped like panel log rows, so `pager log --window`
