@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.3
 
 **Idle means idle.** Every age and time-left label had its own once-a-second
 timer, and each one made its window lay itself out again. With a few dozen rows
